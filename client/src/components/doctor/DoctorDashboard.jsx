@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import TeleConsultModal from './TeleConsultModal';
 import { 
   Stethoscope, 
   Video, 
@@ -7,14 +8,16 @@ import {
   CheckCircle, 
   Clock, 
   AlertCircle, 
-  User, 
   Activity, 
   Pill,
-  Send
+  Send,
+  Download,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function DoctorDashboard() {
   const { user } = useAuth();
+  const [showVideoModal, setShowVideoModal] = useState(false);
 
   // Active queue state
   const [activeQueue, setActiveQueue] = useState([
@@ -50,16 +53,30 @@ export default function DoctorDashboard() {
     medicines: 'Tab Labetalol 100mg BD, Tab Calcium 500mg OD',
     advice: 'Immediate referral to District Hospital if BP > 150/100. Bed rest advised.'
   });
+  const [completedPrescriptions, setCompletedPrescriptions] = useState([]);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
   const handleCompleteConsult = (e) => {
     e.preventDefault();
     setIsSubmitted(true);
+
+    const record = {
+      id: `rx-${Date.now()}`,
+      patientName: selectedCase.patientName,
+      doctorName: user?.name || 'Dr. Arvind Sharma',
+      diagnosis: prescription.diagnosis,
+      medicines: prescription.medicines,
+      advice: prescription.advice,
+      timestamp: new Date().toLocaleString()
+    };
+
     setTimeout(() => {
-      setActiveQueue(activeQueue.filter(item => item.id !== selectedCase.id));
-      setSelectedCase(activeQueue.find(item => item.id !== selectedCase.id) || null);
+      setCompletedPrescriptions([record, ...completedPrescriptions]);
+      const remaining = activeQueue.filter(item => item.id !== selectedCase.id);
+      setActiveQueue(remaining);
+      setSelectedCase(remaining[0] || null);
       setIsSubmitted(false);
-    }, 1200);
+    }, 1000);
   };
 
   return (
@@ -79,20 +96,20 @@ export default function DoctorDashboard() {
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Tele-OPD Live
+            Tele-OPD Ready
           </span>
         </div>
       </div>
 
-      {/* Main Grid: Left Queue, Right Consultation Room */}
+      {/* Main Grid: Patient Queue & E-Prescription */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
         
-        {/* Left Side: Patient Queue (4 Cols) */}
+        {/* Left Side: Waiting Queue (4 Cols) */}
         <div className="lg:col-span-4 space-y-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Waiting Tele-Consult Queue ({activeQueue.length})
+                Live Tele-Consult Queue ({activeQueue.length})
               </h3>
               <Clock className="w-4 h-4 text-slate-400" />
             </div>
@@ -107,10 +124,10 @@ export default function DoctorDashboard() {
                   <div
                     key={item.id}
                     onClick={() => setSelectedCase(item)}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+                    className={`p-3.5 rounded-2xl border cursor-pointer transition-all ${
                       selectedCase?.id === item.id
-                        ? 'border-emerald-600 bg-emerald-50/50 shadow-sm ring-1 ring-emerald-500/20'
-                        : 'border-slate-200 bg-slate-50/40 hover:bg-slate-100/70'
+                        ? 'border-emerald-600 bg-emerald-50/60 shadow-sm ring-2 ring-emerald-500/20'
+                        : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
                     }`}
                   >
                     <div className="flex justify-between items-start">
@@ -127,21 +144,40 @@ export default function DoctorDashboard() {
                       </span>
                     </div>
                     <div className="mt-2 text-[11px] text-slate-600 font-medium">
-                      ASHA: <span className="text-slate-800 font-semibold">{item.ashaName}</span>
+                      ASHA Worker: <span className="text-slate-800 font-semibold">{item.ashaName}</span>
                     </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
+
+          {/* Completed Prescriptions History */}
+          {completedPrescriptions.length > 0 && (
+            <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                Signed Today ({completedPrescriptions.length})
+              </h3>
+              <div className="space-y-2">
+                {completedPrescriptions.map((rx) => (
+                  <div key={rx.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                    <p className="font-bold text-slate-900">{rx.patientName}</p>
+                    <p className="text-[11px] text-slate-500">{rx.diagnosis}</p>
+                    <span className="text-[10px] text-emerald-700 font-semibold">● E-Prescription Synced</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Right Side: Active Video & E-Prescription Desk (8 Cols) */}
+        {/* Right Side: Active Teleconsultation & E-Prescription Form (8 Cols) */}
         <div className="lg:col-span-8 space-y-6">
           {selectedCase ? (
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
               
-              {/* Tele-Consult Bar */}
+              {/* Tele-Consult Header Bar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
                 <div>
                   <h2 className="text-lg font-bold text-slate-900">{selectedCase.patientName}</h2>
@@ -150,32 +186,32 @@ export default function DoctorDashboard() {
                   </p>
                 </div>
                 <button
-                  onClick={() => alert(`Starting Live Low-Bandwidth WebRTC Video Session with ${selectedCase.patientName}`)}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all active:scale-95"
+                  onClick={() => setShowVideoModal(true)}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all active:scale-95"
                 >
                   <Video className="w-4 h-4" />
-                  Connect Live WebRTC Video
+                  Connect Live WebRTC Video Room
                 </button>
               </div>
 
               {/* Vitals Summary Strip */}
               <div className="grid grid-cols-3 gap-3 my-4">
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Blood Pressure</span>
                   <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.vitals.bp} mmHg</p>
                 </div>
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Pulse Rate</span>
                   <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.vitals.pulse} bpm</p>
                 </div>
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Oxygen Saturation</span>
                   <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.vitals.spO2}</p>
                 </div>
               </div>
 
               {/* Symptoms Overview */}
-              <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl mb-6">
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl mb-6">
                 <div className="flex items-center gap-1.5 text-xs font-bold text-amber-900 mb-1">
                   <AlertCircle className="w-4 h-4 text-amber-600" />
                   Reported Field Triage Symptoms
@@ -187,7 +223,7 @@ export default function DoctorDashboard() {
               <form onSubmit={handleCompleteConsult} className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                   <FileText className="w-4 h-4 text-emerald-600" />
-                  Digital E-Prescription & Referral Directives
+                  Digital E-Prescription & Clinical Orders
                 </h3>
 
                 <div>
@@ -208,12 +244,12 @@ export default function DoctorDashboard() {
                     required
                     value={prescription.medicines}
                     onChange={(e) => setPrescription({ ...prescription, medicines: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-medium font-mono"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-mono font-medium"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Advice & Follow-up Instructions</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Advice & Follow-up Directives</label>
                   <textarea
                     rows={2}
                     value={prescription.advice}
@@ -223,19 +259,19 @@ export default function DoctorDashboard() {
                 </div>
 
                 {isSubmitted && (
-                  <div className="p-3 bg-emerald-100 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2">
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center gap-2">
                     <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    Prescription signed and securely synced back to ASHA field device!
+                    Digital E-Prescription signed & synced back to ASHA field unit!
                   </div>
                 )}
 
                 <button
                   type="submit"
                   disabled={isSubmitted}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-xs rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
                 >
                   <Send className="w-4 h-4" />
-                  Sign E-Prescription & Complete Consultation
+                  Digitally Sign & Sync E-Prescription
                 </button>
               </form>
 
@@ -248,6 +284,15 @@ export default function DoctorDashboard() {
         </div>
 
       </div>
+
+      {/* WebRTC Video Consultation Room Modal */}
+      {showVideoModal && selectedCase && (
+        <TeleConsultModal
+          patient={selectedCase}
+          onClose={() => setShowVideoModal(false)}
+          onEndCall={() => setShowVideoModal(false)}
+        />
+      )}
 
     </div>
   );
