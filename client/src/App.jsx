@@ -1,18 +1,45 @@
 import React from 'react';
-import { Activity, ShieldCheck } from 'lucide-react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { useAuth } from './context/AuthContext';
+import Navbar from './components/Navbar';
+import Login from './pages/Login';
+import AshaDashboard from './components/asha/AshaDashboard';
+import DoctorDashboard from './components/doctor/DoctorDashboard';
+import AdminDashboard from './components/admin/AdminDashboard';
 
 export default function App() {
-  return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-4">
-      <div className="bg-slate-800 p-6 rounded-2xl shadow-xl border border-slate-700 flex items-center gap-4">
-        <Activity className="w-10 h-10 text-emerald-400 animate-pulse" />
-        <div>
-          <h1 className="text-2xl font-bold text-emerald-400">SIH26133 Rural Health</h1>
-          <p className="text-slate-400 text-sm flex items-center gap-1 mt-1">
-            <ShieldCheck className="w-4 h-4 text-emerald-500" /> Client & Tailwind v4 Configured
-          </p>
-        </div>
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 font-semibold">
+        Loading SwasthyaSetu Portal...
       </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
+      <Navbar />
+      <main className="flex-1">
+        <Routes>
+          <Route
+            path="/"
+            element={
+              !user ? (
+                <Login />
+              ) : user.role === 'ASHA_WORKER' ? (
+                <AshaDashboard />
+              ) : user.role === 'DOCTOR' ? (
+                <DoctorDashboard />
+              ) : (
+                <AdminDashboard />
+              )
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }
