@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import TriageAssessmentModal from './TriageAssessmentModal';
+import AbhaCardModal from './AbhaCardModal';
 import { useAuth } from '../../context/AuthContext';
 import { 
   savePatientLocally, 
@@ -25,6 +26,7 @@ export default function AshaDashboard() {
   const { user } = useAuth();
   const [showNewPatientModal, setShowNewPatientModal] = useState(false);
   const [selectedPatientForTriage, setSelectedPatientForTriage] = useState(null);
+  const [selectedPatientForCard, setSelectedPatientForCard] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Initial seed state
@@ -74,7 +76,6 @@ export default function AshaDashboard() {
       if (localData && localData.length > 0) {
         setPatients(localData);
       } else {
-        // Seed default into IndexedDB
         for (const p of patients) {
           await savePatientLocally(p);
         }
@@ -85,7 +86,7 @@ export default function AshaDashboard() {
   };
 
   // Offline / Online sync hook
-  const { isOnline, syncing, syncMessage, syncPendingData } = useNetworkSync(() => {
+  const { isOnline, syncing, syncMessage } = useNetworkSync(() => {
     loadLocalData();
   });
 
@@ -122,19 +123,15 @@ export default function AshaDashboard() {
       syncStatus: isOnline ? 'SYNCED' : 'PENDING'
     };
 
-    // Save to IndexedDB
     await savePatientLocally(created);
-
     setPatients([created, ...patients]);
     setShowNewPatientModal(false);
     setNewPatient({ fullName: '', age: '', gender: 'Female', village: 'Kunda Village', category: 'General' });
   };
 
   const handleSaveTriageAssessment = async (assessment) => {
-    // 1. Save triage assessment to IndexedDB
     await saveTriageLocally(assessment);
 
-    // 2. Update patient state
     const updated = patients.map(p => {
       if (p.id === assessment.patientId) {
         const item = {
@@ -170,7 +167,6 @@ export default function AshaDashboard() {
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">ASHA Field Workdesk</h1>
             
-            {/* Live Network Status Indicator */}
             {isOnline ? (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
                 <Wifi className="w-3 h-3 text-emerald-600" />
@@ -290,7 +286,11 @@ export default function AshaDashboard() {
                   </div>
                   
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded text-slate-700 border border-slate-200">
+                    <span 
+                      onClick={() => setSelectedPatientForCard(patient)}
+                      className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 hover:bg-teal-50 hover:text-teal-700 cursor-pointer px-2 py-0.5 rounded text-slate-700 border border-slate-200 transition-all"
+                      title="Click to view & print ABHA QR Pass"
+                    >
                       <QrCode className="w-3 h-3 text-slate-500" /> {patient.abhaId}
                     </span>
                     <span className="text-xs text-slate-400">• {patient.village}</span>
@@ -430,6 +430,14 @@ export default function AshaDashboard() {
           patient={selectedPatientForTriage}
           onClose={() => setSelectedPatientForTriage(null)}
           onSaveAssessment={handleSaveTriageAssessment}
+        />
+      )}
+
+      {/* Printable ABHA QR Pass Modal */}
+      {selectedPatientForCard && (
+        <AbhaCardModal
+          patient={selectedPatientForCard}
+          onClose={() => setSelectedPatientForCard(null)}
         />
       )}
 

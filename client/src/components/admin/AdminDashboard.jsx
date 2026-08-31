@@ -8,24 +8,73 @@ import {
   Activity, 
   UserCheck, 
   PlusCircle, 
-  CheckCircle2 
+  CheckCircle2,
+  TrendingUp,
+  MapPin,
+  RefreshCw,
+  Send
 } from 'lucide-react';
-import axios from 'axios';
 
 export default function AdminDashboard() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'staff' | 'inventory'
+  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'outbreak' | 'inventory' | 'staff'
+
+  // Village Cluster Outbreak Data
+  const [villageClusters, setVillageClusters] = useState([
+    {
+      id: 'v-1',
+      village: 'Kunda Village (Sector 4)',
+      cases: 19,
+      trend: '+45%',
+      condition: 'Acute Diarrheal Outbreak & Dehydration',
+      threatLevel: 'HIGH_ALERT',
+      actionNeeded: 'Deploy ORS & Halogen Water Purification Tablets'
+    },
+    {
+      id: 'v-2',
+      village: 'Rampur Sub-Center',
+      cases: 8,
+      trend: '+12%',
+      condition: 'High Grade Pediatric Viral Fever',
+      threatLevel: 'MODERATE_WATCH',
+      actionNeeded: 'Mobile Doctor Van Inspection Scheduled'
+    },
+    {
+      id: 'v-3',
+      village: 'Bhawanipur Ward 2',
+      cases: 2,
+      trend: 'Stable',
+      condition: 'Maternal Hypertension Monitoring',
+      threatLevel: 'NORMAL',
+      actionNeeded: 'Routine Antenatal Care Checkups'
+    }
+  ]);
+
+  // Essential Drugs Inventory State
+  const [drugs, setDrugs] = useState([
+    { id: 'd-1', name: 'Paracetamol 500mg (Tablets)', stock: 3500, minThreshold: 1000, status: 'NORMAL', unit: 'strips' },
+    { id: 'd-2', name: 'Oxytocin 10 IU Injection', stock: 12, minThreshold: 50, status: 'CRITICAL', unit: 'vials' },
+    { id: 'd-3', name: 'Oral Rehydration Salts (ORS)', stock: 65, minThreshold: 200, status: 'LOW_STOCK', unit: 'packets' },
+    { id: 'd-4', name: 'Magnesium Sulphate 50% Inj', stock: 8, minThreshold: 30, status: 'CRITICAL', unit: 'vials' },
+    { id: 'd-5', name: 'Amoxicillin 250mg Suspension', stock: 450, minThreshold: 100, status: 'NORMAL', unit: 'bottles' }
+  ]);
+
+  const [replenishSuccess, setReplenishSuccess] = useState('');
+
+  const handleReplenish = (drugId) => {
+    setDrugs(prev => prev.map(d => {
+      if (d.id === drugId) {
+        return { ...d, stock: d.stock + 200, status: 'NORMAL' };
+      }
+      return d;
+    }));
+    setReplenishSuccess('Autonomous replenishment requisition sent to District Warehouse!');
+    setTimeout(() => setReplenishSuccess(''), 3000);
+  };
 
   // Staff Form State
-  const [newStaff, setNewStaff] = useState({
-    name: '',
-    phone: '',
-    role: 'ASHA_WORKER',
-    phcCenter: 'PHC Kunda Hub'
-  });
+  const [newStaff, setNewStaff] = useState({ name: '', phone: '', role: 'ASHA_WORKER', phcCenter: 'PHC Kunda Hub' });
   const [staffSuccess, setStaffSuccess] = useState('');
-
-  // Mock staff list
   const [staffList, setStaffList] = useState([
     { id: 'st-1', name: 'Dr. Arvind Sharma', role: 'DOCTOR', phone: '9811223344', center: 'PHC Kunda Hub' },
     { id: 'st-2', name: 'Sunita Devi', role: 'ASHA_WORKER', phone: '9876543210', center: 'PHC Kunda Hub' },
@@ -42,7 +91,7 @@ export default function AdminDashboard() {
       center: newStaff.phcCenter
     };
     setStaffList([created, ...staffList]);
-    setStaffSuccess(`${newStaff.name} successfully registered as ${newStaff.role}!`);
+    setStaffSuccess(`${newStaff.name} registered as ${newStaff.role}!`);
     setNewStaff({ name: '', phone: '', role: 'ASHA_WORKER', phcCenter: 'PHC Kunda Hub' });
     setTimeout(() => setStaffSuccess(''), 3000);
   };
@@ -63,30 +112,38 @@ export default function AdminDashboard() {
         </div>
 
         {/* Tab Controls */}
-        <div className="flex bg-slate-100 p-1 rounded-xl">
+        <div className="flex bg-slate-100 p-1 rounded-2xl">
           <button
             onClick={() => setActiveTab('overview')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
               activeTab === 'overview' ? 'bg-white text-indigo-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            Analytics Overview
+            Analytics
           </button>
           <button
-            onClick={() => setActiveTab('staff')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-              activeTab === 'staff' ? 'bg-white text-indigo-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+            onClick={() => setActiveTab('outbreak')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              activeTab === 'outbreak' ? 'bg-white text-indigo-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            Staff Onboarding
+            Outbreak Heatmap
           </button>
           <button
             onClick={() => setActiveTab('inventory')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
               activeTab === 'inventory' ? 'bg-white text-indigo-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            Medicine Inventory
+            Drug Stock
+          </button>
+          <button
+            onClick={() => setActiveTab('staff')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+              activeTab === 'staff' ? 'bg-white text-indigo-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            Staff Portal
           </button>
         </div>
       </div>
@@ -95,45 +152,154 @@ export default function AdminDashboard() {
       {activeTab === 'overview' && (
         <div className="mt-6 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
               <p className="text-xs font-bold text-slate-500 uppercase">Total Field Intake</p>
               <p className="text-2xl font-black text-slate-900 mt-1">1,428</p>
               <span className="text-[11px] text-emerald-600 font-semibold">↑ 14% this week</span>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
               <p className="text-xs font-bold text-rose-600 uppercase">Emergency Referrals</p>
               <p className="text-2xl font-black text-rose-700 mt-1">29</p>
-              <span className="text-[11px] text-rose-600 font-semibold">Triaged Critical</span>
+              <span className="text-[11px] text-rose-600 font-semibold">Triaged Critical Red</span>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
               <p className="text-xs font-bold text-indigo-600 uppercase">Active Tele-OPDs</p>
               <p className="text-2xl font-black text-indigo-900 mt-1">84</p>
-              <span className="text-[11px] text-indigo-600 font-semibold">Connected Live</span>
+              <span className="text-[11px] text-indigo-600 font-semibold">Connected WebRTC</span>
             </div>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-              <p className="text-xs font-bold text-amber-600 uppercase">Low Stock Medicines</p>
-              <p className="text-2xl font-black text-amber-700 mt-1">3 Alerts</p>
-              <span className="text-[11px] text-amber-600 font-semibold">Replenishment Needed</span>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <p className="text-xs font-bold text-amber-600 uppercase">Stock Out Risk</p>
+              <p className="text-2xl font-black text-amber-700 mt-1">3 Drugs</p>
+              <span className="text-[11px] text-amber-600 font-semibold">Under Min Threshold</span>
             </div>
           </div>
         </div>
       )}
 
-      {/* Tab 2: Staff Registration & Access */}
+      {/* Tab 2: Outbreak Surveillance Heatmap */}
+      {activeTab === 'outbreak' && (
+        <div className="mt-6 space-y-4">
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <MapPin className="w-5 h-5 text-rose-600" />
+                  Village Epidemiological Cluster Surveillance
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Automated geo-clustering based on incoming ASHA triage reports.</p>
+              </div>
+              <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200 text-xs font-bold rounded-xl animate-pulse">
+                Live Spatial Alert
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {villageClusters.map((cluster) => (
+                <div 
+                  key={cluster.id} 
+                  className={`p-4 rounded-2xl border flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+                    cluster.threatLevel === 'HIGH_ALERT'
+                      ? 'bg-rose-50/50 border-rose-200'
+                      : cluster.threatLevel === 'MODERATE_WATCH'
+                        ? 'bg-amber-50/50 border-amber-200'
+                        : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900 text-sm">{cluster.village}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        cluster.threatLevel === 'HIGH_ALERT' ? 'bg-rose-200 text-rose-800' : 'bg-amber-200 text-amber-800'
+                      }`}>
+                        {cluster.threatLevel.replace('_', ' ')}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-700 font-semibold mt-1">{cluster.condition}</p>
+                    <p className="text-xs text-slate-500 mt-0.5 font-medium">Recommended Action: {cluster.actionNeeded}</p>
+                  </div>
+
+                  <div className="text-left md:text-right shrink-0">
+                    <p className="text-xl font-black text-slate-900">{cluster.cases} <span className="text-xs font-normal text-slate-500">cases</span></p>
+                    <span className="text-xs text-rose-600 font-bold">{cluster.trend} surge</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 3: Essential Drug Stock & Automated Replenishment */}
+      {activeTab === 'inventory' && (
+        <div className="mt-6 space-y-4">
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Pill className="w-5 h-5 text-indigo-600" />
+                  PHC Essential Drug Supply Chain & Buffer Stock
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">Automated threshold triggers for critical emergency medications.</p>
+              </div>
+            </div>
+
+            {replenishSuccess && (
+              <div className="my-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                {replenishSuccess}
+              </div>
+            )}
+
+            <div className="divide-y divide-slate-100">
+              {drugs.map((drug) => (
+                <div key={drug.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <span className="font-bold text-slate-900 text-sm">{drug.name}</span>
+                    <p className="text-xs text-slate-500">Minimum Buffer Threshold: {drug.minThreshold} {drug.unit}</p>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className={`text-base font-black ${
+                        drug.status === 'CRITICAL' ? 'text-rose-600' : drug.status === 'LOW_STOCK' ? 'text-amber-600' : 'text-slate-900'
+                      }`}>
+                        {drug.stock} <span className="text-xs font-medium text-slate-500">{drug.unit}</span>
+                      </p>
+                    </div>
+
+                    {drug.status !== 'NORMAL' ? (
+                      <button
+                        onClick={() => handleReplenish(drug.id)}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition-all"
+                      >
+                        Reorder Supply
+                      </button>
+                    ) : (
+                      <span className="text-xs font-semibold text-emerald-600 px-3 py-1 bg-emerald-50 rounded-xl border border-emerald-200">
+                        In Stock
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tab 4: Staff Management */}
       {activeTab === 'staff' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
           <div className="lg:col-span-5 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <PlusCircle className="w-5 h-5 text-indigo-600" />
-              Register New Health Staff
+              Provision Healthcare Staff
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Authorizes Doctor / ASHA Worker mobile number for instant portal login.
-            </p>
+            <p className="text-xs text-slate-500 mt-0.5">Authorizes mobile credentials for portal access.</p>
 
             {staffSuccess && (
               <div className="my-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800 font-semibold">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 <span>{staffSuccess}</span>
               </div>
             )}
@@ -152,19 +318,19 @@ export default function AdminDashboard() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Mobile Phone Number</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Phone Number</label>
                 <input
                   type="tel"
                   required
                   value={newStaff.phone}
                   onChange={(e) => setNewStaff({ ...newStaff, phone: e.target.value })}
-                  placeholder="10-digit registered number"
+                  placeholder="10-digit number"
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-600"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Assigned Role</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Role</label>
                 <select
                   value={newStaff.role}
                   onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
@@ -177,9 +343,9 @@ export default function AdminDashboard() {
 
               <button
                 type="submit"
-                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/20 transition-all"
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md shadow-indigo-600/20"
               >
-                Provision Staff Credentials
+                Save Staff Credentials
               </button>
             </form>
           </div>
@@ -204,42 +370,6 @@ export default function AdminDashboard() {
                   </span>
                 </div>
               ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 3: Essential Drugs & Medicine Inventory */}
-      {activeTab === 'inventory' && (
-        <div className="mt-6 bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-          <h3 className="text-base font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <Pill className="w-5 h-5 text-indigo-600" />
-            PHC Essential Drug Stock & Supply Chain
-          </h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-bold text-slate-800">Paracetamol 500mg</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Normal</span>
-              </div>
-              <p className="text-xl font-black text-slate-900 mt-2">4,500 <span className="text-xs font-normal text-slate-500">strips</span></p>
-            </div>
-
-            <div className="p-4 rounded-2xl border border-rose-200 bg-rose-50/50">
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-bold text-rose-900">Oxytocin 10 IU Injection</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-100 text-rose-800">Low Stock</span>
-              </div>
-              <p className="text-xl font-black text-rose-900 mt-2">18 <span className="text-xs font-normal text-rose-600">vials (Critical)</span></p>
-            </div>
-
-            <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
-              <div className="flex justify-between items-start">
-                <span className="text-xs font-bold text-slate-800">ORS Packets</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">Adequate</span>
-              </div>
-              <p className="text-xl font-black text-slate-900 mt-2">820 <span className="text-xs font-normal text-slate-500">units</span></p>
             </div>
           </div>
         </div>
