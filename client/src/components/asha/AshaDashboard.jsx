@@ -1,22 +1,33 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import TriageAssessmentModal from './TriageAssessmentModal';
 import { useAuth } from '../../context/AuthContext';
+import { 
+  savePatientLocally, 
+  getAllLocalPatients, 
+  saveTriageLocally 
+} from '../../db/offlineDb';
+import { useNetworkSync } from '../../utils/useNetworkSync';
 import { 
   UserPlus, 
   Activity, 
+  Wifi, 
   WifiOff, 
   AlertTriangle, 
   Search, 
   QrCode, 
   ChevronRight,
-  HeartPulse
+  HeartPulse,
+  RefreshCw,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function AshaDashboard() {
   const { user } = useAuth();
   const [showNewPatientModal, setShowNewPatientModal] = useState(false);
+  const [selectedPatientForTriage, setSelectedPatientForTriage] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Mock patient queue
+  // Initial seed state
   const [patients, setPatients] = useState([
     {
       id: 'p-1',
@@ -27,7 +38,8 @@ export default function AshaDashboard() {
       village: 'Kunda Village',
       category: 'Maternal (High Risk)',
       severity: 'CRITICAL_RED',
-      lastVitals: { bp: '145/95', pulse: 92, spO2: 96 }
+      lastVitals: { bp: '145/95', pulse: 92, spO2: 96 },
+      syncStatus: 'SYNCED'
     },
     {
       id: 'p-2',
@@ -38,7 +50,8 @@ export default function AshaDashboard() {
       village: 'Rampur',
       category: 'Diabetic',
       severity: 'MODERATE_YELLOW',
-      lastVitals: { bp: '130/85', pulse: 76, spO2: 98 }
+      lastVitals: { bp: '130/85', pulse: 76, spO2: 98 },
+      syncStatus: 'SYNCED'
     },
     {
       id: 'p-3',
@@ -49,9 +62,36 @@ export default function AshaDashboard() {
       village: 'Kunda Village',
       category: 'Pediatric Care',
       severity: 'LOW_GREEN',
-      lastVitals: { bp: '95/60', pulse: 105, spO2: 99 }
+      lastVitals: { bp: '95/60', pulse: 105, spO2: 99 },
+      syncStatus: 'SYNCED'
     }
   ]);
+
+  // Load offline cached records on start
+  const loadLocalData = async () => {
+    try {
+      const localData = await getAllLocalPatients();
+      if (localData && localData.length > 0) {
+        setPatients(localData);
+      } else {
+        // Seed default into IndexedDB
+        for (const p of patients) {
+          await savePatientLocally(p);
+        }
+      }
+    } catch (e) {
+      console.warn('Local IndexedDB load failed', e);
+    }
+  };
+
+  // Offline / Online sync hook
+  const { isOnline, syncing, syncMessage, syncPendingData } = useNetworkSync(() => {
+    loadLocalData();
+  });
+
+  useEffect(() => {
+    loadLocalData();
+  }, []);
 
   // Form State for New Patient
   const [newPatient, setNewPatient] = useState({
@@ -67,7 +107,7 @@ export default function AshaDashboard() {
     return `91-${r()}-${r()}-${r()}`;
   };
 
-  const handleCreatePatient = (e) => {
+  const handleCreatePatient = async (e) => {
     e.preventDefault();
     const created = {
       id: `p-${Date.now()}`,
@@ -78,11 +118,42 @@ export default function AshaDashboard() {
       village: newPatient.village,
       category: newPatient.category,
       severity: 'LOW_GREEN',
-      lastVitals: { bp: '120/80', pulse: 75, spO2: 98 }
+      lastVitals: { bp: '120/80', pulse: 75, spO2: 98 },
+      syncStatus: isOnline ? 'SYNCED' : 'PENDING'
     };
+
+    // Save to IndexedDB
+    await savePatientLocally(created);
+
     setPatients([created, ...patients]);
     setShowNewPatientModal(false);
     setNewPatient({ fullName: '', age: '', gender: 'Female', village: 'Kunda Village', category: 'General' });
+  };
+
+  const handleSaveTriageAssessment = async (assessment) => {
+    // 1. Save triage assessment to IndexedDB
+    await saveTriageLocally(assessment);
+
+    // 2. Update patient state
+    const updated = patients.map(p => {
+      if (p.id === assessment.patientId) {
+        const item = {
+          ...p,
+          severity: assessment.triageResult.severity,
+          lastVitals: {
+            bp: `${assessment.vitals.systolicBP}/${assessment.vitals.diastolicBP}`,
+            pulse: Number(assessment.vitals.pulseRate),
+            spO2: Number(assessment.vitals.spO2)
+          },
+          syncStatus: isOnline ? 'SYNCED' : 'PENDING'
+        };
+        savePatientLocally(item);
+        return item;
+      }
+      return p;
+    });
+
+    setPatients(updated);
   };
 
   const filteredPatients = patients.filter(p => 
@@ -93,21 +164,53 @@ export default function AshaDashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       
-      {/* Top Welcome Bar */}
+      {/* Top Welcome & Network Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">ASHA Field Workdesk</h1>
-          <p className="text-sm text-slate-500 mt-0.5">Welcome, <span className="font-semibold text-slate-700">{user?.name}</span> • {user?.phcCenter}</p>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">ASHA Field Workdesk</h1>
+            
+            {/* Live Network Status Indicator */}
+            {isOnline ? (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <Wifi className="w-3 h-3 text-emerald-600" />
+                Online (Connected)
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 animate-pulse">
+                <WifiOff className="w-3 h-3 text-amber-600" />
+                Offline Mode (IndexedDB Active)
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Welcome, <span className="font-semibold text-slate-700">{user?.name}</span> • {user?.phcCenter}
+          </p>
         </div>
         
-        <button
-          onClick={() => setShowNewPatientModal(true)}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-sm rounded-xl shadow-md shadow-teal-600/20 transition-all"
-        >
-          <UserPlus className="w-4 h-4" />
-          Onboard New Citizen (ABHA)
-        </button>
+        <div className="flex items-center gap-2">
+          {syncing && (
+            <span className="text-xs font-semibold text-teal-600 flex items-center gap-1">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Syncing...
+            </span>
+          )}
+          <button
+            onClick={() => setShowNewPatientModal(true)}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-sm rounded-xl shadow-md shadow-teal-600/20 transition-all"
+          >
+            <UserPlus className="w-4 h-4" />
+            Onboard New Citizen (ABHA)
+          </button>
+        </div>
       </div>
+
+      {/* Sync Notification Banner */}
+      {syncMessage && (
+        <div className="my-4 p-3 bg-teal-50 border border-teal-200 rounded-2xl flex items-center gap-2 text-xs font-semibold text-teal-900 animate-fade-in">
+          <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
+          <span>{syncMessage}</span>
+        </div>
+      )}
 
       {/* KPI Status Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-6">
@@ -135,9 +238,9 @@ export default function AshaDashboard() {
 
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <p className="text-xs font-bold text-amber-600 uppercase tracking-wider">Offline Cache Engine</p>
-            <p className="text-sm font-bold text-slate-800 mt-1">IndexedDB Active</p>
-            <span className="text-[11px] text-emerald-600 font-semibold">● Auto-syncs on network</span>
+            <p className="text-xs font-bold text-amber-600 uppercase tracking-wider">Offline Storage Cache</p>
+            <p className="text-sm font-bold text-slate-800 mt-1">IndexedDB Vault</p>
+            <span className="text-[11px] text-emerald-600 font-semibold">● Auto-syncs on reconnect</span>
           </div>
           <div className="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
             <WifiOff className="w-6 h-6" />
@@ -174,9 +277,14 @@ export default function AshaDashboard() {
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-slate-900 text-sm">{patient.name}</span>
                     <span className="text-xs text-slate-500 font-medium">({patient.age}y, {patient.gender})</span>
-                    {patient.category.includes('High Risk') && (
+                    {patient.category?.includes('High Risk') && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
                         High Risk
+                      </span>
+                    )}
+                    {patient.syncStatus === 'PENDING' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                        Unsynced
                       </span>
                     )}
                   </div>
@@ -211,10 +319,12 @@ export default function AshaDashboard() {
                 </div>
 
                 <button
-                  className="p-2 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-xl transition-all"
-                  title="Open Triage Form"
+                  onClick={() => setSelectedPatientForTriage(patient)}
+                  className="px-3 py-2 text-teal-700 hover:text-white hover:bg-teal-600 bg-teal-50 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold shadow-sm"
+                  title="Open Clinical Triage Form"
                 >
-                  <ChevronRight className="w-5 h-5" />
+                  Triage
+                  <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -312,6 +422,15 @@ export default function AshaDashboard() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Clinical AI Triage Modal */}
+      {selectedPatientForTriage && (
+        <TriageAssessmentModal
+          patient={selectedPatientForTriage}
+          onClose={() => setSelectedPatientForTriage(null)}
+          onSaveAssessment={handleSaveTriageAssessment}
+        />
       )}
 
     </div>
