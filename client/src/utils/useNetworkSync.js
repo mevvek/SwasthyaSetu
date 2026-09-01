@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getPendingSyncRecords, markRecordsAsSynced } from '../db/offlineDb';
-import axios from 'axios';
+import { syncBulkApi } from './api';
 
 export const useNetworkSync = (onSyncComplete) => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -15,21 +15,24 @@ export const useNetworkSync = (onSyncComplete) => {
       if (totalPending === 0) return;
 
       setSyncing(true);
-      setSyncMessage(`Syncing ${totalPending} offline records with PHC Server...`);
+      setSyncMessage(`Syncing ${totalPending} offline records with MongoDB Atlas...`);
 
-      // Mock / Actual API payload sync
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Real API Sync to backend
+      await syncBulkApi({
+        patients: unsyncedPatients,
+        triageRecords: unsyncedTriage
+      });
 
       const pIds = unsyncedPatients.map(p => p.id);
       const tIds = unsyncedTriage.map(t => t.localId);
       await markRecordsAsSynced(pIds, tIds);
 
-      setSyncMessage(`Successfully synced ${totalPending} records!`);
+      setSyncMessage(`Successfully synced ${totalPending} records to Cloud!`);
       if (onSyncComplete) onSyncComplete();
 
       setTimeout(() => setSyncMessage(''), 3500);
     } catch (err) {
-      console.error('Background sync failed:', err);
+      console.error('Background cloud sync failed:', err);
     } finally {
       setSyncing(false);
     }
@@ -48,7 +51,6 @@ export const useNetworkSync = (onSyncComplete) => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Initial check on mount
     if (navigator.onLine) {
       syncPendingData();
     }
