@@ -1,643 +1,1007 @@
 import React, { useState, useEffect } from 'react';
-import TriageAssessmentModal from './TriageAssessmentModal';
-import AbhaCardModal from './AbhaCardModal';
-import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
+import { useSocket } from '../../context/SocketContext';
+import { db } from '../../db/offlineDb';
+import { useNetworkSync } from '../../utils/useNetworkSync';
+import { useSpeechRecognition } from '../../utils/useSpeechRecognition';
 import { 
-  fetchPatientsApi, 
-  createPatientApi, 
-  updatePatientApi,
-  deletePatientApi,
-  submitTriageApi 
+  deletePatientApi, 
+  updatePatientApi, 
+  createPatientApi 
 } from '../../utils/api';
 import { 
-  savePatientLocally, 
-  getAllLocalPatients, 
-  saveTriageLocally 
-} from '../../db/offlineDb';
-import { useNetworkSync } from '../../utils/useNetworkSync';
-import { 
+  Users, 
   UserPlus, 
-  Activity, 
-  Wifi, 
-  WifiOff, 
-  AlertTriangle, 
   Search, 
+  Filter, 
+  Activity, 
   QrCode, 
-  ChevronRight,
-  HeartPulse,
-  RefreshCw,
+  Video, 
+  CloudCheck, 
+  CloudOff, 
+  AlertTriangle,
+  Baby,
+  Phone,
+  MapPin,
+  Mic,
+  MicOff,
+  Sparkles,
+  ShieldCheck,
   CheckCircle2,
-  Trash2,
+  FileText,
+  Pill,
+  X,
+  Printer,
   Edit2,
-  AlertOctagon,
-  X
+  Trash2
 } from 'lucide-react';
+import TriageAssessmentModal from './TriageAssessmentModal';
+import AbhaCardModal from './AbhaCardModal';
+import TeleConsultModal from '../doctor/TeleConsultModal';
 
 export default function AshaDashboard() {
-  const { user } = useAuth();
+  const { t, lang } = useLanguage();
+  const { socket } = useSocket();
+  const { isSyncing, pendingCount } = useNetworkSync();
+  const { isListening, transcript, startListening, stopListening } = useSpeechRecognition();
+
   const [patients, setPatients] = useState([]);
-  const [showNewPatientModal, setShowNewPatientModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('ALL');
+  const [isRegisterOpen, setIsRegisterOpen] = useState(false);
   const [editingPatient, setEditingPatient] = useState(null);
   const [patientToDelete, setPatientToDelete] = useState(null);
+
   const [selectedPatientForTriage, setSelectedPatientForTriage] = useState(null);
-  const [selectedPatientForCard, setSelectedPatientForCard] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [selectedPatientForAbha, setSelectedPatientForAbha] = useState(null);
+  const [selectedPatientForTele, setSelectedPatientForTele] = useState(null);
+  
+  // Real-time prescription state
+  const [selectedRxPatient, setSelectedRxPatient] = useState(null);
+  const [liveRxAlert, setLiveRxAlert] = useState(null);
 
-  const loadPatientsData = async () => {
-    try {
-      if (navigator.onLine) {
-        const { data } = await fetchPatientsApi();
-        if (data && data.length > 0) {
-          setPatients(data);
-          for (const p of data) {
-            await savePatientLocally({ ...p, id: p._id || p.id });
-          }
-          setLoading(false);
-          return;
-        }
-      }
-      const localData = await getAllLocalPatients();
-      setPatients(localData || []);
-    } catch (err) {
-      console.warn('API fetch failed, loading IndexedDB fallback:', err);
-      const localData = await getAllLocalPatients();
-      setPatients(localData || []);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const { isOnline, syncing, syncMessage } = useNetworkSync(() => {
-    loadPatientsData();
-  });
-
-  useEffect(() => {
-    loadPatientsData();
-  }, []);
-
-  const [newPatient, setNewPatient] = useState({
-    fullName: '',
+  // Form State with clean empty defaults (Placeholders will display)
+  const [formData, setFormData] = useState({
+    name: '',
     age: '',
     gender: 'Female',
-    village: 'Kunda Village',
-    category: 'General'
+    village: '',
+    phone: '',
+    abhaId: '',
+    isPregnant: false,
+    gestationalWeeks: '',
+    fieldNotes: ''
   });
 
-  const handleCreatePatient = async (e) => {
-    e.preventDefault();
-    const payload = {
-      name: newPatient.fullName,
-      age: Number(newPatient.age),
-      gender: newPatient.gender,
-      village: newPatient.village,
-      category: newPatient.category,
-      severity: 'LOW_GREEN',
-      lastVitals: { bp: '120/80', pulse: 75, spO2: 98 }
+  // Speech transcript live update into field notes
+  useEffect(() => {
+    if (transcript) {
+      setFormData((prev) => ({
+        ...prev,
+        fieldNotes: prev.fieldNotes ? `${prev.fieldNotes} ${transcript}` : transcript
+      }));
+    }
+  }, [transcript]);
+
+  // Load citizens from IndexedDB
+  const loadPatients = async () => {
+    try {
+      const records = await db.patients.toArray();
+      if (records && records.length > 0) {
+        setPatients(records);
+      } else {
+        const initialMock = [
+          {
+            id: 'pat_001',
+            _id: 'pat_001',
+            name: 'Sunita Devi',
+            age: 24,
+            gender: 'Female',
+            village: 'Rampur Sub-Center',
+            phone: '9876541230',
+            abhaId: '91-4521-8890-1234',
+            isPregnant: true,
+            gestationalWeeks: 32,
+            severity: 'CRITICAL_RED',
+            lastTriage: { severity: 'RED', score: 85, timestamp: new Date().toISOString() },
+            synced: true,
+            fieldNotes: 'Severe pedal edema and mild headache reported.',
+            prescription: null
+          },
+          {
+            id: 'pat_002',
+            _id: 'pat_002',
+            name: 'Ramesh Kumar',
+            age: 58,
+            gender: 'Male',
+            village: 'Shivpur Hub',
+            phone: '9812345678',
+            abhaId: '91-1122-3344-5566',
+            isPregnant: false,
+            gestationalWeeks: null,
+            severity: 'MODERATE_YELLOW',
+            lastTriage: { severity: 'YELLOW', score: 45, timestamp: new Date().toISOString() },
+            synced: false,
+            fieldNotes: 'Persistent dry cough for 3 weeks.',
+            prescription: null
+          },
+          {
+            id: 'pat_003',
+            _id: 'pat_003',
+            name: 'Pooja Verma',
+            age: 21,
+            gender: 'Female',
+            village: 'Kalyanpur',
+            phone: '9988776655',
+            abhaId: '91-9988-7766-5544',
+            isPregnant: true,
+            gestationalWeeks: 14,
+            severity: 'LOW_GREEN',
+            lastTriage: { severity: 'GREEN', score: 10, timestamp: new Date().toISOString() },
+            synced: true,
+            fieldNotes: 'Routine ANC checkup, normal vitals.',
+            prescription: null
+          }
+        ];
+        await db.patients.bulkPut(initialMock);
+        setPatients(initialMock);
+      }
+    } catch (err) {
+      console.error('Failed to read from local DB:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadPatients();
+  }, []);
+
+  // Listen to incoming prescriptions & patient updates
+  useEffect(() => {
+    const handleIncomingPrescription = (rxData) => {
+      console.log('⚡ ASHA Received Rx:', rxData);
+
+      // Play real-time alert chime
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+          osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+          gain.gain.setValueAtTime(0.2, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.4);
+        }
+      } catch (e) {
+        console.warn('Audio alert failed', e);
+      }
+
+      setLiveRxAlert(rxData);
+
+      setPatients((prev) =>
+        prev.map((p) => {
+          const pid = p._id || p.id;
+          const rxPid = rxData.patientId || rxData._id || rxData.id;
+          const match = (pid && rxPid && String(pid) === String(rxPid)) || 
+                        (p.name && rxData.patientName && p.name.trim().toLowerCase() === rxData.patientName.trim().toLowerCase());
+
+          if (match) {
+            const updated = { ...p, prescription: rxData };
+            db.patients.put(updated).catch(() => {});
+            return updated;
+          }
+          return p;
+        })
+      );
+
+      setTimeout(() => {
+        setLiveRxAlert((curr) => (curr?.timestamp === rxData.timestamp ? null : curr));
+      }, 7000);
     };
 
-    try {
-      if (isOnline) {
-        const { data } = await createPatientApi(payload);
-        await savePatientLocally({ ...data, id: data._id });
-        setPatients([data, ...patients]);
-      } else {
-        const localCreated = {
-          id: `local-${Date.now()}`,
-          abhaId: `91-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}-${Math.floor(1000 + Math.random() * 9000)}`,
-          ...payload,
-          syncStatus: 'PENDING'
-        };
-        await savePatientLocally(localCreated);
-        setPatients([localCreated, ...patients]);
-      }
-      setShowNewPatientModal(false);
-      setNewPatient({ fullName: '', age: '', gender: 'Female', village: 'Kunda Village', category: 'General' });
-    } catch (err) {
-      console.error('Failed to register patient:', err);
+    if (socket) {
+      socket.on('prescription_dispatched', handleIncomingPrescription);
     }
+
+    // Cross-Tab fallback sync channel
+    const channel = new BroadcastChannel('swasthya_rx_channel');
+    channel.onmessage = (event) => {
+      if (event.data && event.data.type === 'RX_DISPATCHED') {
+        handleIncomingPrescription(event.data.payload);
+      }
+    };
+
+    if (socket) {
+      socket.on('patient_deleted', (deletedId) => {
+        setPatients((prev) => prev.filter(p => (p._id || p.id) !== deletedId));
+      });
+    }
+
+    return () => {
+      if (socket) {
+        socket.off('prescription_dispatched', handleIncomingPrescription);
+        socket.off('patient_deleted');
+      }
+      channel.close();
+    };
+  }, [socket]);
+
+  // Open Edit Modal
+  const handleOpenEdit = (patient) => {
+    setEditingPatient(patient);
+    setFormData({
+      name: patient.name,
+      age: patient.age,
+      gender: patient.gender,
+      village: patient.village || '',
+      phone: patient.phone || '',
+      abhaId: patient.abhaId || '',
+      isPregnant: !!patient.isPregnant,
+      gestationalWeeks: patient.gestationalWeeks || '',
+      fieldNotes: patient.fieldNotes || ''
+    });
+    setIsRegisterOpen(true);
   };
 
-  const handleUpdatePatient = async (e) => {
+  // Submit Register or Edit Form
+  const handleRegisterOrEditSubmit = async (e) => {
     e.preventDefault();
-    try {
-      const patientId = editingPatient._id || editingPatient.id;
-      const payload = {
-        name: editingPatient.name,
-        age: Number(editingPatient.age),
-        gender: editingPatient.gender,
-        village: editingPatient.village,
-        category: editingPatient.category
+    
+    if (editingPatient) {
+      // EDIT MODE
+      const pid = editingPatient._id || editingPatient.id;
+      const updatedCitizen = {
+        ...editingPatient,
+        ...formData,
+        age: Number(formData.age),
+        gestationalWeeks: formData.isPregnant ? Number(formData.gestationalWeeks) : null,
+        synced: true
       };
 
-      if (isOnline) {
-        const { data } = await updatePatientApi(patientId, payload);
-        setPatients(patients.map(p => ((p._id || p.id) === patientId ? data : p)));
-      } else {
-        const updated = { ...editingPatient, ...payload };
-        await savePatientLocally(updated);
-        setPatients(patients.map(p => ((p._id || p.id) === patientId ? updated : p)));
+      try {
+        await db.patients.put(updatedCitizen);
+        try {
+          await updatePatientApi(pid, updatedCitizen);
+        } catch (apiErr) {
+          console.warn('Backend update failed, kept offline:', apiErr);
+        }
+
+        if (socket) {
+          socket.emit('patient_queue_updated', updatedCitizen);
+        }
+
+        setPatients((prev) => prev.map(p => (p._id || p.id) === pid ? updatedCitizen : p));
+        setIsRegisterOpen(false);
+        setEditingPatient(null);
+      } catch (err) {
+        console.error('Error updating patient:', err);
       }
-      setEditingPatient(null);
-    } catch (err) {
-      console.error('Patient record update failed:', err);
+    } else {
+      // CREATE MODE
+      const tempId = `pat_${Date.now()}`;
+      const newCitizen = {
+        id: tempId,
+        _id: tempId,
+        ...formData,
+        age: Number(formData.age),
+        gestationalWeeks: formData.isPregnant ? Number(formData.gestationalWeeks) : null,
+        severity: 'LOW_GREEN',
+        lastTriage: null,
+        prescription: null,
+        synced: false,
+        createdAt: new Date().toISOString()
+      };
+
+      try {
+        try {
+          const res = await createPatientApi(newCitizen);
+          if (res?.data?._id) {
+            newCitizen._id = res.data._id;
+            newCitizen.id = res.data._id;
+            newCitizen.synced = true;
+          }
+        } catch (apiErr) {
+          console.warn('API sync pending, saved in IndexedDB:', apiErr);
+        }
+
+        await db.patients.add(newCitizen);
+
+        if (socket) {
+          socket.emit('patient_queue_updated', newCitizen);
+        }
+
+        setPatients((prev) => [newCitizen, ...prev]);
+        setIsRegisterOpen(false);
+      } catch (err) {
+        console.error('Error adding citizen to IndexedDB:', err);
+      }
     }
+
+    setFormData({
+      name: '',
+      age: '',
+      gender: 'Female',
+      village: '',
+      phone: '',
+      abhaId: '',
+      isPregnant: false,
+      gestationalWeeks: '',
+      fieldNotes: ''
+    });
   };
 
-  const confirmDeletePatient = async () => {
+  // Delete Citizen
+  const confirmDeleteCitizen = async () => {
     if (!patientToDelete) return;
     const pid = patientToDelete._id || patientToDelete.id;
 
     try {
-      if (isOnline) {
+      await db.patients.delete(pid);
+      try {
         await deletePatientApi(pid);
+      } catch (apiErr) {
+        console.warn('API delete failed, deleted from local DB:', apiErr);
       }
-      setPatients(patients.filter(p => (p._id || p.id) !== pid));
+
+      if (socket) {
+        socket.emit('patient_deleted', pid);
+      }
+
+      setPatients((prev) => prev.filter(p => (p._id || p.id) !== pid));
       setPatientToDelete(null);
     } catch (err) {
-      console.error('Patient removal failed:', err);
+      console.error('Error deleting patient:', err);
     }
   };
 
-  const handleSaveTriageAssessment = async (assessment) => {
-    try {
-      if (isOnline) {
-        await submitTriageApi(assessment);
-      } else {
-        await saveTriageLocally(assessment);
-      }
+  const filteredPatients = patients.filter((p) => {
+    const matchesSearch = 
+      p.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.phone?.includes(searchQuery) ||
+      p.abhaId?.includes(searchQuery);
 
-      const updated = patients.map(p => {
-        const pid = p._id || p.id;
-        if (pid === assessment.patientId) {
-          const item = {
-            ...p,
-            severity: assessment.triageResult.severity,
-            lastVitals: {
-              bp: `${assessment.vitals.systolicBP}/${assessment.vitals.diastolicBP}`,
-              pulse: Number(assessment.vitals.pulseRate),
-              spO2: Number(assessment.vitals.spO2)
-            }
-          };
-          savePatientLocally(item);
-          return item;
-        }
-        return p;
-      });
+    if (!matchesSearch) return false;
 
-      setPatients(updated);
-    } catch (err) {
-      console.error('Triage assessment save error:', err);
+    const sev = p.severity || (p.lastTriage?.severity === 'RED' ? 'CRITICAL_RED' : p.lastTriage?.severity === 'YELLOW' ? 'MODERATE_YELLOW' : 'LOW_GREEN');
+
+    if (severityFilter === 'RED') return sev === 'CRITICAL_RED' || p.lastTriage?.severity === 'RED';
+    if (severityFilter === 'YELLOW') return sev === 'MODERATE_YELLOW' || p.lastTriage?.severity === 'YELLOW';
+    if (severityFilter === 'GREEN') return sev === 'LOW_GREEN' || p.lastTriage?.severity === 'GREEN';
+
+    return true;
+  });
+
+  const getTriagePill = (patient) => {
+    const sev = patient?.severity || patient?.lastTriage?.severity;
+    if (!patient?.lastTriage && (!sev || sev === 'LOW_GREEN')) {
+      return (
+        <span className="px-2.5 py-1 rounded-xl bg-slate-100 text-slate-500 text-[11px] font-bold border border-slate-200">
+          Pending Triage
+        </span>
+      );
     }
+    if (sev === 'CRITICAL_RED' || sev === 'RED') {
+      return (
+        <span className="px-2.5 py-1 rounded-xl bg-rose-50 text-rose-700 text-[11px] font-black border border-rose-200 flex items-center gap-1 shadow-sm">
+          <AlertTriangle className="w-3 h-3 text-rose-600" />
+          {t.criticalFilter}
+        </span>
+      );
+    }
+    if (sev === 'MODERATE_YELLOW' || sev === 'YELLOW') {
+      return (
+        <span className="px-2.5 py-1 rounded-xl bg-amber-50 text-amber-700 text-[11px] font-black border border-amber-200 flex items-center gap-1">
+          <Activity className="w-3 h-3 text-amber-600" />
+          {t.moderateFilter}
+        </span>
+      );
+    }
+    return (
+      <span className="px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-700 text-[11px] font-black border border-emerald-200 flex items-center gap-1">
+        <Activity className="w-3 h-3 text-emerald-600" />
+        {t.normalFilter}
+      </span>
+    );
   };
-
-  const filteredPatients = patients.filter(p => 
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    p.abhaId?.includes(searchTerm)
-  );
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 font-sans">
       
-      {/* Top Welcome Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-200">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">ASHA Field Workdesk</h1>
-            
-            {isOnline ? (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                <Wifi className="w-3 h-3 text-emerald-600" />
-                Live Cloud Sync (MongoDB)
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 animate-pulse">
-                <WifiOff className="w-3 h-3 text-amber-600" />
-                Offline Mode (IndexedDB Active)
-              </span>
-            )}
+      {/* Real-time Notification Banner from Doctor */}
+      {liveRxAlert && (
+        <div className="p-4 bg-emerald-950 border-2 border-emerald-500 text-white rounded-3xl shadow-xl flex items-center justify-between gap-4 animate-bounce">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-500 flex items-center justify-center text-white shrink-0">
+              <Pill className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-emerald-400 uppercase tracking-wider">
+                {lang === 'hi' ? 'डॉक्टर द्वारा डिजिटल पर्ची जारी (Digital Rx Received)' : 'Digital Prescription Dispatched by Doctor'}
+              </p>
+              <p className="text-sm font-bold text-white">
+                {lang === 'hi' ? (
+                  <>
+                    {liveRxAlert.doctorName} ने <span className="underline decoration-emerald-400">{liveRxAlert.patientName}</span> के लिए दवा एवं निर्देश भेजे हैं।
+                  </>
+                ) : (
+                  <>
+                    {liveRxAlert.doctorName} has issued Rx & Clinical Orders for <span className="underline decoration-emerald-400">{liveRxAlert.patientName}</span>.
+                  </>
+                )}
+              </p>
+            </div>
           </div>
-          <p className="text-sm text-slate-500 mt-0.5">
-            Welcome, <span className="font-semibold text-slate-700">{user?.name}</span> • {user?.phcCenter}
+          <button
+            onClick={() => {
+              setSelectedRxPatient({ name: liveRxAlert.patientName, prescription: liveRxAlert });
+              setLiveRxAlert(null);
+            }}
+            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-black text-xs rounded-xl transition-all shrink-0"
+          >
+            {lang === 'hi' ? 'तुरंत देखें (View Rx)' : 'View Rx'}
+          </button>
+        </div>
+      )}
+
+      {/* Header & Stats Banner */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-black tracking-tight text-slate-900">
+              {t.ashaDeskTitle}
+            </h1>
+            <span className="px-2 py-0.5 rounded-md bg-teal-50 border border-teal-200 text-teal-700 text-[10px] font-bold">
+              Sub-Center Hub
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            {t.ashaDeskSub} • Total Registered: <span className="font-bold text-slate-800">{patients.length}</span>
           </p>
         </div>
-        
-        <div className="flex items-center gap-2">
-          {syncing && (
-            <span className="text-xs font-semibold text-teal-600 flex items-center gap-1">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Syncing...
-            </span>
+
+        <div className="flex items-center gap-3">
+          {pendingCount > 0 ? (
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold animate-pulse">
+              <CloudOff className="w-4 h-4 text-amber-600" />
+              <span>{pendingCount} {t.pendingSync}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>{t.syncStatus}</span>
+            </div>
           )}
+
           <button
-            onClick={() => setShowNewPatientModal(true)}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-sm rounded-xl shadow-md shadow-teal-600/20 transition-all"
+            onClick={() => {
+              setEditingPatient(null);
+              setFormData({
+                name: '',
+                age: '',
+                gender: 'Female',
+                village: '',
+                phone: '',
+                abhaId: '',
+                isPregnant: false,
+                gestationalWeeks: '',
+                fieldNotes: ''
+              });
+              setIsRegisterOpen(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white font-bold text-xs shadow-md shadow-teal-600/20 transition-all"
           >
             <UserPlus className="w-4 h-4" />
-            Onboard New Citizen (ABHA)
+            <span>{t.registerCitizenBtn}</span>
           </button>
         </div>
       </div>
 
-      {/* Sync Notification Banner */}
-      {syncMessage && (
-        <div className="my-4 p-3 bg-teal-50 border border-teal-200 rounded-2xl flex items-center gap-2 text-xs font-semibold text-teal-900 animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0" />
-          <span>{syncMessage}</span>
-        </div>
-      )}
-
-      {/* KPI Status Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 my-6">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Field Patients</p>
-            <p className="text-2xl font-black text-slate-900 mt-1">{patients.length}</p>
-          </div>
-          <div className="w-12 h-12 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600">
-            <Activity className="w-6 h-6" />
-          </div>
+      {/* Search & Severity Filter Bar */}
+      <div className="flex flex-col sm:flex-row items-center gap-3">
+        <div className="relative flex-1 w-full">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={t.searchPlaceholder}
+            className="w-full pl-10 pr-4 py-2 text-xs rounded-2xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium text-slate-900"
+          />
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-rose-600 uppercase tracking-wider">High Risk / Red Alerts</p>
-            <p className="text-2xl font-black text-rose-700 mt-1">
-              {patients.filter(p => p.severity === 'CRITICAL_RED').length}
-            </p>
-          </div>
-          <div className="w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center text-rose-600">
-            <AlertTriangle className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-teal-600 uppercase tracking-wider">Cloud Storage Engine</p>
-            <p className="text-sm font-bold text-slate-800 mt-1">MongoDB Atlas</p>
-            <span className="text-[11px] text-emerald-600 font-semibold">● Real-time REST API Bound</span>
-          </div>
-          <div className="w-12 h-12 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600">
-            <Activity className="w-6 h-6" />
-          </div>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Filter className="w-4 h-4 text-slate-400 shrink-0 hidden sm:block" />
+          <select
+            value={severityFilter}
+            onChange={(e) => setSeverityFilter(e.target.value)}
+            className="w-full sm:w-auto px-3 py-2 text-xs rounded-2xl border border-slate-300 bg-white font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-600"
+          >
+            <option value="ALL">{t.allSeverity}</option>
+            <option value="RED">{t.criticalFilter}</option>
+            <option value="YELLOW">{t.moderateFilter}</option>
+            <option value="GREEN">{t.normalFilter}</option>
+          </select>
         </div>
       </div>
 
-      {/* Patient List Section */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 sm:p-6 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <h2 className="text-base font-bold text-slate-900">Assigned Village Patient Queue</h2>
-          
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by Name or ABHA ID..."
-              className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-            />
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="p-12 text-center text-slate-400 text-xs">
-            <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-teal-600" />
-            Loading registry records from MongoDB Atlas...
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {filteredPatients.map((patient) => {
-              const pid = patient._id || patient.id;
-              return (
-                <div key={pid} className="p-4 sm:p-5 hover:bg-slate-50/80 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-full bg-teal-100 text-teal-800 font-bold flex items-center justify-center text-sm shrink-0">
-                      {patient.name.charAt(0)}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{patient.name}</span>
-                        <span className="text-xs text-slate-500 font-medium">({patient.age}y, {patient.gender})</span>
-                        {patient.category?.includes('High Risk') && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700 border border-rose-200">
-                            High Risk
-                          </span>
-                        )}
-                      </div>
-                      
-                      <div className="flex items-center gap-2 mt-1">
-                        <span 
-                          onClick={() => setSelectedPatientForCard(patient)}
-                          className="inline-flex items-center gap-1 font-mono text-[11px] bg-slate-100 hover:bg-teal-50 hover:text-teal-700 cursor-pointer px-2 py-0.5 rounded text-slate-700 border border-slate-200 transition-all"
-                          title="View and print official ABHA Health QR Card"
-                        >
-                          <QrCode className="w-3 h-3 text-slate-500" /> {patient.abhaId}
-                        </span>
-                        <span className="text-xs text-slate-400">• {patient.village}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Actions & Vitals */}
-                  <div className="flex items-center justify-between sm:justify-end gap-3">
-                    <div className="text-left sm:text-right">
-                      <div className="flex items-center gap-1 text-xs font-semibold text-slate-700">
-                        <HeartPulse className="w-3.5 h-3.5 text-teal-600" />
-                        <span>BP: {patient.lastVitals?.bp || '120/80'}</span>
-                        <span className="text-slate-300">|</span>
-                        <span>SpO2: {patient.lastVitals?.spO2 || 98}%</span>
-                      </div>
-                      <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded mt-1 ${
-                        patient.severity === 'CRITICAL_RED'
-                          ? 'bg-rose-100 text-rose-800'
-                          : patient.severity === 'MODERATE_YELLOW'
-                            ? 'bg-amber-100 text-amber-800'
-                            : 'bg-emerald-100 text-emerald-800'
-                      }`}>
-                        {(patient.severity || 'LOW_GREEN').replace('_', ' ')}
+      {/* Citizen Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {filteredPatients.map((patient) => {
+          const pid = patient._id || patient.id;
+          return (
+            <div 
+              key={pid}
+              className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-4"
+            >
+              <div className="space-y-2">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 leading-tight">
+                      {patient.name}
+                    </h3>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mt-1">
+                      <span>{patient.gender}, {patient.age} yrs</span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1">
+                        <MapPin className="w-3 h-3 text-slate-400" />
+                        {patient.village || 'Field Village'}
                       </span>
                     </div>
+                  </div>
 
-                    {/* Edit Record */}
+                  {/* Actions: Edit & Delete buttons */}
+                  <div className="flex items-center gap-1">
                     <button
-                      onClick={() => setEditingPatient(patient)}
-                      className="p-2 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all border border-slate-200"
-                      title="Edit Demographic Data"
+                      type="button"
+                      onClick={() => handleOpenEdit(patient)}
+                      className="p-1.5 text-slate-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-all"
+                      title={lang === 'hi' ? 'नागरिक विवरण संपादित करें' : 'Edit Citizen Details'}
                     >
-                      <Edit2 className="w-4 h-4" />
+                      <Edit2 className="w-3.5 h-3.5" />
                     </button>
-
-                    {/* Delete Record Trigger */}
                     <button
+                      type="button"
                       onClick={() => setPatientToDelete(patient)}
-                      className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all border border-slate-200"
-                      title="Discharge / Remove Record"
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                      title={lang === 'hi' ? 'नागरिक रिकॉर्ड हटाएं' : 'Delete Citizen'}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
-
-                    {/* Triage Trigger */}
-                    <button
-                      onClick={() => setSelectedPatientForTriage(patient)}
-                      className="px-3 py-2 text-teal-700 hover:text-white hover:bg-teal-600 bg-teal-50 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 text-xs font-bold shadow-sm"
-                    >
-                      Triage
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                    {patient.synced ? (
+                      <span className="text-emerald-600 ml-1" title={t.syncStatus}>
+                        <CloudCheck className="w-4 h-4" />
+                      </span>
+                    ) : (
+                      <span className="text-amber-500 animate-pulse ml-1" title={t.pendingSync}>
+                        <CloudOff className="w-4 h-4" />
+                      </span>
+                    )}
                   </div>
                 </div>
-              );
-            })}
+
+                {patient.isPregnant && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-pink-50 border border-pink-200 text-pink-700 text-[11px] font-bold">
+                    <Baby className="w-3.5 h-3.5 text-pink-600" />
+                    <span>{t.maternalBadge} ({patient.gestationalWeeks}w)</span>
+                  </div>
+                )}
+
+                {/* Prescription Badge if Doctor has signed Rx */}
+                {patient.prescription && (
+                  <div className="flex items-center justify-between p-2 rounded-xl bg-teal-50 border border-teal-200">
+                    <span className="text-[10px] font-black text-teal-800 flex items-center gap-1">
+                      <Pill className="w-3 h-3 text-teal-600" />
+                      {lang === 'hi' ? 'Rx Ready (दवा पर्ची प्राप्त)' : 'Rx Ready (Prescription Received)'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRxPatient(patient)}
+                      className="text-[10px] font-bold text-teal-900 underline hover:text-teal-700"
+                    >
+                      {lang === 'hi' ? 'पर्ची खोलें' : 'View Rx'}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-1.5 text-xs text-slate-600 font-medium">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">Phone:</span>
+                  <span className="font-semibold text-slate-800">{patient.phone || 'N/A'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-400">ABHA ID:</span>
+                  <span className="font-mono font-semibold text-teal-800 text-[11px]">
+                    {patient.abhaId || 'ABHA Unlinked'}
+                  </span>
+                </div>
+                {patient.fieldNotes && (
+                  <div className="pt-1 text-[11px] text-slate-500 italic border-t border-slate-200/60 line-clamp-1">
+                    "{patient.fieldNotes}"
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 pt-1 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Status</span>
+                  {getTriagePill(patient)}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPatientForTriage(patient)}
+                    className="px-2 py-2 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 text-[11px] font-bold transition-all flex items-center justify-center gap-1"
+                  >
+                    <Activity className="w-3.5 h-3.5" />
+                    <span>{t.btnTriage}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPatientForAbha(patient)}
+                    className="px-2 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 text-[11px] font-bold transition-all flex items-center justify-center gap-1"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>{t.btnAbha}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPatientForTele(patient)}
+                    className="px-2 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 text-[11px] font-bold transition-all flex items-center justify-center gap-1"
+                  >
+                    <Video className="w-3.5 h-3.5" />
+                    <span>{t.btnTele}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {filteredPatients.length === 0 && (
+          <div className="col-span-full p-12 bg-white rounded-3xl border border-slate-200 text-center space-y-2">
+            <Users className="w-8 h-8 text-slate-400 mx-auto" />
+            <p className="text-sm font-bold text-slate-700">{t.noCitizensFound}</p>
           </div>
         )}
       </div>
 
-      {/* Professional Deletion Dialog Modal */}
-      {patientToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200 relative">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
-                <AlertOctagon className="w-6 h-6" />
+      {/* Registration / Edit Modal Form */}
+      {isRegisterOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-slate-950 p-5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {editingPatient ? <Edit2 className="w-5 h-5 text-teal-400" /> : <UserPlus className="w-5 h-5 text-teal-400" />}
+                <h3 className="text-sm font-black tracking-tight">
+                  {editingPatient 
+                    ? (lang === 'hi' ? 'नागरिक विवरण संपादित करें (Edit Citizen)' : 'Edit Citizen Profile') 
+                    : t.registerCitizenBtn}
+                </h3>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Discharge Patient Record</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Are you sure you want to remove <span className="font-bold text-slate-800">{patientToDelete.name}</span> from the active clinical registry? This action will archive associated triage history.
-                </p>
-              </div>
+              <button 
+                onClick={() => {
+                  setIsRegisterOpen(false);
+                  setEditingPatient(null);
+                }}
+                className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1"
+              >
+                ✕
+              </button>
             </div>
 
-            <div className="flex gap-3 mt-6">
+            <form onSubmit={handleRegisterOrEditSubmit} className="p-6 space-y-4 max-h-[85vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                    placeholder="e.g. Suman Devi"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Age (Years)</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    max="120"
+                    value={formData.age}
+                    onChange={(e) => setFormData({ ...formData, age: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                    placeholder="e.g. 26"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Gender</label>
+                  <select
+                    value={formData.gender}
+                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium bg-white"
+                  >
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Village Hub</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.village}
+                    onChange={(e) => setFormData({ ...formData, village: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                    placeholder="e.g. Rampur Sub-Center"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Mobile Contact</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                    placeholder="e.g. 9876543210"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">ABHA Health ID (Optional)</label>
+                  <input
+                    type="text"
+                    value={formData.abhaId}
+                    onChange={(e) => setFormData({ ...formData, abhaId: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                    placeholder="91-0000-0000-0000"
+                  />
+                </div>
+              </div>
+
+              {formData.gender === 'Female' && (
+                <div className="p-3.5 bg-pink-50 rounded-2xl border border-pink-200 space-y-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.isPregnant}
+                      onChange={(e) => setFormData({ ...formData, isPregnant: e.target.checked })}
+                      className="w-4 h-4 text-pink-600 rounded focus:ring-pink-500"
+                    />
+                    <span className="text-xs font-bold text-pink-900">
+                      Maternal Patient (Pregnant / High-Risk Antenatal Care)
+                    </span>
+                  </label>
+
+                  {formData.isPregnant && (
+                    <div>
+                      <label className="block text-[11px] font-bold text-pink-800 mb-1">
+                        Gestational Age (Weeks: 1 to 42)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="42"
+                        required
+                        value={formData.gestationalWeeks}
+                        onChange={(e) => setFormData({ ...formData, gestationalWeeks: e.target.value })}
+                        className="w-full px-3 py-1.5 text-xs rounded-xl border border-pink-300 bg-white font-semibold text-pink-950 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        placeholder="e.g. 32"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Hindi Voice Recognition Symptoms with Live Mic Toggle */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Field Clinical Observations / Symptoms
+                  </label>
+                  <button
+                    type="button"
+                    onClick={isListening ? stopListening : startListening}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all ${
+                      isListening 
+                        ? 'bg-rose-500 text-white border-rose-600 animate-pulse' 
+                        : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                    }`}
+                  >
+                    {isListening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3 text-teal-600" />}
+                    <span>{isListening ? 'Listening...' : 'Voice Input (Mic)'}</span>
+                  </button>
+                </div>
+                <textarea
+                  rows="2"
+                  value={formData.fieldNotes}
+                  onChange={(e) => setFormData({ ...formData, fieldNotes: e.target.value })}
+                  placeholder="Record symptoms or speak in Hindi/English..."
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsRegisterOpen(false);
+                    setEditingPatient(null);
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-sm transition-all"
+                >
+                  {editingPatient ? 'Save Changes' : 'Register Citizen'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {patientToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200">
+            <h3 className="text-base font-black text-slate-900">
+              {lang === 'hi' ? 'नागरिक रिकॉर्ड हटाएं (Delete Citizen)' : 'Delete Citizen Record'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-2">
+              {lang === 'hi' ? (
+                <>
+                  क्या आप सच में <strong className="text-slate-800">{patientToDelete.name}</strong> का रिकॉर्ड हटाना चाहते हैं? यह ऑफलाइन और डॉक्टर कतार दोनों से हट जाएगा।
+                </>
+              ) : (
+                <>
+                  Are you sure you want to delete <strong className="text-slate-800">{patientToDelete.name}</strong>? This case will be removed from both offline registry and doctor priority queue.
+                </>
+              )}
+            </p>
+            <div className="flex gap-2 mt-5 justify-end">
               <button
                 type="button"
                 onClick={() => setPatientToDelete(null)}
-                className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all"
+                className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={confirmDeletePatient}
-                className="flex-1 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md shadow-rose-600/20 transition-all"
+                onClick={confirmDeleteCitizen}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-all"
               >
-                Confirm Discharge
+                Delete Record
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal: Edit Citizen Details */}
-      {editingPatient && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-900">Edit Citizen Demographic Record</h3>
-              <button onClick={() => setEditingPatient(null)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-4 h-4" />
+      {/* ASHA View Prescription Modal (Bilingual Bound) */}
+      {selectedRxPatient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="bg-slate-950 p-5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-teal-400" />
+                <h3 className="text-sm font-black tracking-tight">
+                  {lang === 'hi' ? 'डॉक्टर द्वारा ई-पर्चा (Digital Prescription)' : 'Digital Clinical Prescription (Rx)'}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedRxPatient(null)}
+                className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1"
+              >
+                ✕
               </button>
             </div>
-            
-            <p className="text-xs text-slate-500 mt-2">ABHA Identification: <span className="font-mono font-bold text-slate-700">{editingPatient.abhaId}</span></p>
 
-            <form onSubmit={handleUpdatePatient} className="mt-4 space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Full Legal Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editingPatient.name}
-                  onChange={(e) => setEditingPatient({ ...editingPatient, name: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-600 outline-none"
-                />
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-slate-900">{selectedRxPatient.name || selectedRxPatient.patientName}</p>
+                  <p className="text-slate-500 text-[11px]">Authorized by: {selectedRxPatient.prescription?.doctorName || 'Medical Officer'}</p>
+                </div>
+                <span className="px-2 py-1 bg-emerald-100 text-emerald-800 font-bold rounded-lg text-[10px]">
+                  ABDM Signed
+                </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Age</label>
-                  <input
-                    type="number"
-                    required
-                    value={editingPatient.age}
-                    onChange={(e) => setEditingPatient({ ...editingPatient, age: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-600 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Gender</label>
-                  <select
-                    value={editingPatient.gender}
-                    onChange={(e) => setEditingPatient({ ...editingPatient, gender: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-600 outline-none"
-                  >
-                    <option>Female</option>
-                    <option>Male</option>
-                    <option>Other</option>
-                  </select>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  {lang === 'hi' ? 'क्लिनिकल डायग्नोसिस (DIAGNOSIS)' : 'Clinical Diagnosis'}
+                </label>
+                <p className="text-sm font-bold text-slate-800 bg-teal-50/50 p-2.5 rounded-xl border border-teal-100">
+                  {selectedRxPatient.prescription?.diagnosis || 'Diagnosis recorded.'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  {lang === 'hi' ? 'दवाएं एवं खुराक (PRESCRIBED MEDICINES)' : 'Prescribed Medicines & Dosage'}
+                </label>
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 font-mono text-xs text-slate-900 font-bold leading-relaxed whitespace-pre-line">
+                  {selectedRxPatient.prescription?.medicines || 'Medicines detailed on cloud.'}
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Village / Ward Sector</label>
-                <input
-                  type="text"
-                  required
-                  value={editingPatient.village}
-                  onChange={(e) => setEditingPatient({ ...editingPatient, village: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-600 outline-none"
-                />
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                  {lang === 'hi' ? 'आशा कार्यकर्ता एवं मरीज़ के लिए निर्देश (DOCTOR\'S DIRECTIVES)' : 'Doctor\'s Clinical Directives & Advice'}
+                </label>
+                <p className="text-xs text-slate-700 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed font-medium">
+                  {selectedRxPatient.prescription?.advice || 'Regular follow-up advised.'}
+                </p>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Clinical Surveillance Category</label>
-                <select
-                  value={editingPatient.category}
-                  onChange={(e) => setEditingPatient({ ...editingPatient, category: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-600 outline-none"
-                >
-                  <option>General</option>
-                  <option>Maternal (High Risk)</option>
-                  <option>Pediatric Care</option>
-                  <option>Diabetic</option>
-                  <option>Hypertensive</option>
-                </select>
-              </div>
-
-              <div className="flex gap-2 pt-3">
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
                 <button
                   type="button"
-                  onClick={() => setEditingPatient(null)}
-                  className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                  onClick={() => window.print()}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-all"
                 >
-                  Cancel
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>{lang === 'hi' ? 'पर्ची प्रिंट करें' : 'Print Rx'}</span>
                 </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-md shadow-indigo-600/20"
-                >
-                  Update Record
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Add New Citizen */}
-      {showNewPatientModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-              <h3 className="text-base font-bold text-slate-900">Onboard New Citizen</h3>
-              <button onClick={() => setShowNewPatientModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 mt-2">Generate standardized ABHA identifier and sync to MongoDB cloud.</p>
-
-            <form onSubmit={handleCreatePatient} className="mt-4 space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Full Legal Name</label>
-                <input
-                  type="text"
-                  required
-                  value={newPatient.fullName}
-                  onChange={(e) => setNewPatient({ ...newPatient, fullName: e.target.value })}
-                  placeholder="e.g. Ananya Sharma"
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Age</label>
-                  <input
-                    type="number"
-                    required
-                    value={newPatient.age}
-                    onChange={(e) => setNewPatient({ ...newPatient, age: e.target.value })}
-                    placeholder="25"
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Gender</label>
-                  <select
-                    value={newPatient.gender}
-                    onChange={(e) => setNewPatient({ ...newPatient, gender: e.target.value })}
-                    className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                  >
-                    <option>Female</option>
-                    <option>Male</option>
-                    <option>Other</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Village / Sector</label>
-                <input
-                  type="text"
-                  required
-                  value={newPatient.village}
-                  onChange={(e) => setNewPatient({ ...newPatient, village: e.target.value })}
-                  placeholder="e.g. Kunda Village"
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Clinical Surveillance Category</label>
-                <select
-                  value={newPatient.category}
-                  onChange={(e) => setNewPatient({ ...newPatient, category: e.target.value })}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                >
-                  <option>General</option>
-                  <option>Maternal (High Risk)</option>
-                  <option>Pediatric Care</option>
-                  <option>Diabetic</option>
-                  <option>Hypertensive</option>
-                </select>
-              </div>
-
-              <div className="flex gap-2 pt-3">
                 <button
                   type="button"
-                  onClick={() => setShowNewPatientModal(false)}
-                  className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                  onClick={() => setSelectedRxPatient(null)}
+                  className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-2.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-md shadow-teal-600/20"
-                >
-                  Generate ABHA & Register
+                  {lang === 'hi' ? 'मरीज़ को समझा दिया (Done)' : 'Acknowledge & Close'}
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Triage Modal */}
       {selectedPatientForTriage && (
         <TriageAssessmentModal
           patient={selectedPatientForTriage}
-          onClose={() => setSelectedPatientForTriage(null)}
-          onSaveAssessment={handleSaveTriageAssessment}
+          onClose={() => {
+            setSelectedPatientForTriage(null);
+            loadPatients();
+          }}
         />
       )}
 
-      {/* ABHA QR Pass Modal */}
-      {selectedPatientForCard && (
+      {selectedPatientForAbha && (
         <AbhaCardModal
-          patient={selectedPatientForCard}
-          onClose={() => setSelectedPatientForCard(null)}
+          patient={selectedPatientForAbha}
+          onClose={() => setSelectedPatientForAbha(null)}
+        />
+      )}
+
+      {selectedPatientForTele && (
+        <TeleConsultModal
+          patient={selectedPatientForTele}
+          onClose={() => setSelectedPatientForTele(null)}
         />
       )}
 

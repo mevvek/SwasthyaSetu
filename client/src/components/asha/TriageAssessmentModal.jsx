@@ -1,321 +1,372 @@
 import React, { useState, useEffect } from 'react';
+import { useSocket } from '../../context/SocketContext';
+import { db } from '../../db/offlineDb';
+import { updatePatientApi } from '../../utils/api';
 import { 
-  Heart, 
-  Activity, 
-  Thermometer, 
-  Wind, 
-  Mic, 
-  MicOff, 
-  AlertTriangle, 
-  CheckCircle2, 
+  HeartPulse, 
   X, 
-  Sparkles,
-  Stethoscope
+  Sparkles, 
+  Mic, 
+  MicOff,
+  CheckCircle2 
 } from 'lucide-react';
+import { useSpeechRecognition } from '../../utils/useSpeechRecognition';
 
-export default function TriageAssessmentModal({ patient, onClose, onSaveAssessment }) {
+export default function TriageAssessmentModal({ patient, onClose }) {
+  const { socket } = useSocket();
+  const { isListening, transcript, startListening, stopListening, hasSupport } = useSpeechRecognition();
+
   const [vitals, setVitals] = useState({
-    systolicBP: patient?.lastVitals?.bp ? Number(patient.lastVitals.bp.split('/')[0]) || 120 : 120,
-    diastolicBP: patient?.lastVitals?.bp ? Number(patient.lastVitals.bp.split('/')[1]) || 80 : 80,
-    pulseRate: patient?.lastVitals?.pulse || 76,
-    spO2: patient?.lastVitals?.spO2 || 98,
-    temperature: 98.6,
-    respiratoryRate: 18
+    systolic: patient?.lastVitals?.bp?.split('/')[0] || '120',
+    diastolic: patient?.lastVitals?.bp?.split('/')[1] || '80',
+    pulse: patient?.lastVitals?.pulse || '75',
+    spO2: patient?.lastVitals?.spO2 || '98',
+    temp: patient?.lastVitals?.temp || '98.6',
+    respRate: patient?.lastVitals?.respRate || '18'
   });
 
-  const [symptomsText, setSymptomsText] = useState('');
-  const [isListening, setIsListening] = useState(false);
+  const [notes, setNotes] = useState(patient?.fieldNotes || '');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Clinical AI Triage Evaluation
-  const evaluateTriage = () => {
+  // Dynamic Triage State
+  const [triageResult, setTriageResult] = useState({
+    severity: 'LOW_GREEN',
+    score: 10,
+    flags: ['All physiological vitals within safe clinical baseline.'],
+    action: 'Routine observation and nutritional guidance.'
+  });
+
+  useEffect(() => {
+    if (transcript) {
+      setNotes((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    }
+  }, [transcript]);
+
+  // Real-time Dynamic AI Triage Recalculation
+  useEffect(() => {
+    const sys = Number(vitals.systolic) || 0;
+    const dia = Number(vitals.diastolic) || 0;
+    const pulse = Number(vitals.pulse) || 0;
+    const spo2 = Number(vitals.spO2) || 0;
+    const temp = Number(vitals.temp) || 0;
+    const rr = Number(vitals.respRate) || 0;
+
     const redFlags = [];
-    const recommendations = [];
-    let severity = 'LOW_GREEN';
+    const yellowFlags = [];
 
-    const sBP = Number(vitals.systolicBP);
-    const dBP = Number(vitals.diastolicBP);
-    const pulse = Number(vitals.pulseRate);
-    const spO2 = Number(vitals.spO2);
-    const temp = Number(vitals.temperature);
-    const text = symptomsText.toLowerCase();
-
-    // Maternal / Hypertensive Urgency Trigger
-    if (sBP >= 160 || dBP >= 110) {
-      severity = 'CRITICAL_RED';
-      redFlags.push('Severe Hypertension / Pre-eclampsia Risk (BP >= 160/110)');
-      recommendations.push('Immediate referral to Medical Officer / FRU. Administer Magnesium Sulphate if indicated.');
-    } else if (sBP >= 140 || dBP >= 90) {
-      if (severity !== 'CRITICAL_RED') severity = 'MODERATE_YELLOW';
-      redFlags.push('Stage 2 Hypertension (BP >= 140/90)');
-      recommendations.push('Schedule Tele-consultation with MO within 24 hours.');
+    // Red Checks (Critical)
+    if (sys >= 160 || dia >= 110) {
+      redFlags.push(`Severe Hypertension / Pre-eclampsia Risk (BP: ${sys}/${dia} mmHg)`);
     }
-
-    // Hypoxia / Pediatric Respiratory Distress
-    if (spO2 < 92) {
-      severity = 'CRITICAL_RED';
-      redFlags.push('Severe Hypoxia (SpO2 < 92%)');
-      recommendations.push('Start emergency Oxygen therapy & urgent ambulance transfer.');
-    } else if (spO2 < 95) {
-      if (severity !== 'CRITICAL_RED') severity = 'MODERATE_YELLOW';
-      redFlags.push('Mild Hypoxia (SpO2 92-94%)');
-      recommendations.push('Monitor respiratory vitals every 30 minutes.');
+    if (spo2 > 0 && spo2 < 90) {
+      redFlags.push(`Critical Hypoxia / Respiratory Distress (SpO2: ${spo2}%)`);
     }
-
-    // Shock / Tachycardia
-    if (pulse > 120) {
-      severity = 'CRITICAL_RED';
-      redFlags.push('Severe Tachycardia (Pulse > 120 bpm)');
-      recommendations.push('Evaluate for hemorrhagic/septic shock.');
+    if (pulse > 130 || (pulse > 0 && pulse < 45)) {
+      redFlags.push(`Dangerous Hemodynamic Instability (Pulse: ${pulse} bpm)`);
     }
-
-    // Hyperpyrexia
     if (temp >= 103) {
-      if (severity !== 'CRITICAL_RED') severity = 'MODERATE_YELLOW';
-      redFlags.push('High Grade Pyrexia (Temp >= 103°F)');
-      recommendations.push('Administer Paracetamol & cold sponging.');
+      redFlags.push(`Severe Hyperpyrexia / Sepsis Risk (Temp: ${temp}°F)`);
     }
 
-    // NLP Symptom keyword search
-    if (text.includes('bleeding') || text.includes('khun') || text.includes('chakkar') || text.includes('convulsion') || text.includes('behosh')) {
-      severity = 'CRITICAL_RED';
-      redFlags.push('High-Risk Symptom Keywords Detected in Clinical Notes');
-    }
-
+    // Yellow Checks (Moderate)
     if (redFlags.length === 0) {
-      recommendations.push('Continue routine antenatal/primary health follow-up.');
+      if ((sys >= 140 && sys < 160) || (dia >= 90 && dia < 110)) {
+        yellowFlags.push(`Moderate Hypertension Stage 2 (BP: ${sys}/${dia} mmHg)`);
+      }
+      if (spo2 >= 90 && spo2 <= 94) {
+        yellowFlags.push(`Mild Hypoxemia (SpO2: ${spo2}%)`);
+      }
+      if ((pulse > 100 && pulse <= 130) || (pulse >= 45 && pulse < 55)) {
+        yellowFlags.push(`Tachycardia / Elevated Heart Rate (Pulse: ${pulse} bpm)`);
+      }
+      if (temp >= 100.4 && temp < 103) {
+        yellowFlags.push(`Moderate Febrile Illness (Temp: ${temp}°F)`);
+      }
+      if (rr > 24 || (rr > 0 && rr < 10)) {
+        yellowFlags.push(`Abnormal Respiratory Rate (${rr}/min)`);
+      }
     }
 
-    return { severity, redFlags, recommendations };
-  };
-
-  const triageResult = evaluateTriage();
-
-  // Web Speech API Voice Dictation (Hindi/English)
-  const toggleSpeechRecognition = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Speech Recognition is not supported by your browser.');
-      return;
-    }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'hi-IN';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    if (!isListening) {
-      recognition.start();
-      setIsListening(true);
-
-      recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setSymptomsText(prev => prev ? `${prev} ${transcript}` : transcript);
-        setIsListening(false);
-      };
-
-      recognition.onerror = () => setIsListening(false);
-      recognition.onend = () => setIsListening(false);
+    // Verdict Assignment
+    if (redFlags.length > 0) {
+      setTriageResult({
+        severity: 'CRITICAL_RED',
+        score: 85,
+        flags: redFlags,
+        action: 'Immediate referral to Medical Officer / FRU. Administer emergency protocol.'
+      });
+    } else if (yellowFlags.length > 0) {
+      setTriageResult({
+        severity: 'MODERATE_YELLOW',
+        score: 45,
+        flags: yellowFlags,
+        action: 'Schedule Tele-OPD consultation with Medical Officer within 4 hours.'
+      });
     } else {
-      setIsListening(false);
+      setTriageResult({
+        severity: 'LOW_GREEN',
+        score: 10,
+        flags: ['All physiological vitals within safe clinical baseline.'],
+        action: 'Stable condition. Routine maternal/general healthcare guidance.'
+      });
     }
+  }, [vitals]);
+
+  const handleVitalChange = (field, value) => {
+    setVitals((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleSaveAssessment = () => {
-    const assessmentRecord = {
-      patientId: patient._id || patient.id,
-      vitals: {
-        ...vitals,
-        symptomsText
+  // Save, Update IndexedDB, Update MongoDB, and Broadcast to Doctor
+  const handleSaveAssessment = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+
+    const pid = patient._id || patient.id;
+    const updatedPatientPayload = {
+      ...patient,
+      _id: pid,
+      id: pid,
+      name: patient.name || patient.patientName,
+      severity: triageResult.severity,
+      category: triageResult.severity === 'CRITICAL_RED' ? 'EMERGENCY' : 'GENERAL',
+      lastVitals: {
+        bp: `${vitals.systolic}/${vitals.diastolic}`,
+        pulse: Number(vitals.pulse),
+        spO2: Number(vitals.spO2),
+        temp: Number(vitals.temp),
+        respRate: Number(vitals.respRate)
       },
-      triageResult
+      lastTriage: {
+        severity: triageResult.severity === 'CRITICAL_RED' ? 'RED' : triageResult.severity === 'MODERATE_YELLOW' ? 'YELLOW' : 'GREEN',
+        score: triageResult.score,
+        flags: triageResult.flags,
+        timestamp: new Date().toISOString()
+      },
+      fieldNotes: notes,
+      synced: true
     };
 
-    onSaveAssessment(assessmentRecord);
-    onClose();
+    try {
+      // 1. Update IndexedDB local database
+      await db.patients.put(updatedPatientPayload);
+
+      // 2. Update MongoDB Atlas via REST API
+      try {
+        await updatePatientApi(pid, {
+          severity: updatedPatientPayload.severity,
+          lastVitals: updatedPatientPayload.lastVitals,
+          fieldNotes: updatedPatientPayload.fieldNotes
+        });
+      } catch (apiErr) {
+        console.warn('API update fallback to socket broadcast:', apiErr);
+      }
+
+      // 3. Emit real-time WebSocket event directly to Doctor's live queue
+      if (socket) {
+        socket.emit('patient_queue_updated', updatedPatientPayload);
+      }
+
+      setIsSubmitting(false);
+      onClose();
+    } catch (err) {
+      console.error('Failed to complete assessment:', err);
+      setIsSubmitting(false);
+      onClose();
+    }
   };
 
+  const isRed = triageResult.severity === 'CRITICAL_RED';
+  const isYellow = triageResult.severity === 'MODERATE_YELLOW';
+
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-2xl rounded-3xl p-6 sm:p-8 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm font-sans">
+      <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
         
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+        <div className="p-5 bg-white border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold">
-              <Stethoscope className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-2xl bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600">
+              <HeartPulse className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-black text-slate-900">Clinical AI Triage & Vitals Assessment</h3>
-              <p className="text-xs text-slate-500">Patient: <span className="font-bold text-slate-700">{patient?.name}</span> ({patient?.age}y • {patient?.gender})</p>
+              <h2 className="text-base font-black text-slate-900 tracking-tight">
+                Clinical AI Triage & Vitals Assessment
+              </h2>
+              <p className="text-xs text-slate-500 font-medium">
+                Patient: <span className="font-bold text-slate-800">{patient?.name || patient?.patientName}</span> ({patient?.age}y • {patient?.gender})
+              </p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all">
-            <X className="w-5 h-5" />
+          <button 
+            type="button"
+            onClick={onClose}
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 hover:text-slate-900 transition-all"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Live Triage Urgency Result Alert */}
-        <div className={`my-4 p-4 rounded-2xl border transition-all ${
-          triageResult.severity === 'CRITICAL_RED' 
-            ? 'bg-rose-50 border-rose-200 text-rose-900' 
-            : triageResult.severity === 'MODERATE_YELLOW' 
-              ? 'bg-amber-50 border-amber-200 text-amber-900' 
-              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
-        }`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-indigo-600 animate-pulse" />
-              <span className="text-xs font-bold uppercase tracking-wider">AI Clinical Urgency Classification:</span>
-            </div>
-            <span className={`px-2.5 py-1 text-[11px] font-black rounded-lg ${
-              triageResult.severity === 'CRITICAL_RED'
-                ? 'bg-rose-600 text-white'
-                : triageResult.severity === 'MODERATE_YELLOW'
-                  ? 'bg-amber-600 text-white'
+        {/* Scrollable Form Body */}
+        <form onSubmit={handleSaveAssessment} className="p-6 overflow-y-auto space-y-5 flex-1">
+          
+          {/* AI Clinical Urgency Classification Banner */}
+          <div className={`p-4 rounded-2xl border transition-all ${
+            isRed 
+              ? 'bg-rose-50 border-rose-200 text-rose-950' 
+              : isYellow 
+              ? 'bg-amber-50 border-amber-200 text-amber-950' 
+              : 'bg-emerald-50 border-emerald-200 text-emerald-950'
+          }`}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider">
+                <Sparkles className="w-4 h-4" />
+                AI CLINICAL URGENCY CLASSIFICATION:
+              </div>
+              <span className={`px-2.5 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider ${
+                isRed 
+                  ? 'bg-rose-600 text-white' 
+                  : isYellow 
+                  ? 'bg-amber-600 text-white' 
                   : 'bg-emerald-600 text-white'
-            }`}>
-              {triageResult.severity.replace('_', ' ')}
-            </span>
-          </div>
+              }`}>
+                {isRed ? 'CRITICAL RED' : isYellow ? 'MODERATE YELLOW' : 'NORMAL GREEN'}
+              </span>
+            </div>
 
-          {triageResult.redFlags.length > 0 && (
-            <div className="mt-2 text-xs space-y-1">
+            <div className="text-xs space-y-1">
               <p className="font-bold">Detected Physiological Flags:</p>
-              <ul className="list-disc list-inside space-y-0.5">
-                {triageResult.redFlags.map((flag, idx) => (
-                  <li key={idx} className="font-semibold">{flag}</li>
+              <ul className="list-disc list-inside space-y-0.5 text-[11px] font-semibold">
+                {triageResult.flags.map((flag, idx) => (
+                  <li key={idx}>{flag}</li>
                 ))}
               </ul>
+              <p className="pt-1.5 text-[11px] font-bold">
+                <span className="opacity-80">Recommended Action: </span>
+                {triageResult.action}
+              </p>
             </div>
-          )}
-
-          <div className="mt-2 text-xs">
-            <span className="font-bold">Recommended Action: </span>
-            <span className="font-semibold">{triageResult.recommendations.join(' ')}</span>
           </div>
-        </div>
 
-        {/* Vitals Form Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Heart className="w-3 h-3 text-rose-500" /> Systolic BP (mmHg)
-            </label>
-            <input
-              type="number"
-              value={vitals.systolicBP}
-              onChange={(e) => setVitals({ ...vitals, systolicBP: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
+          {/* Vitals Input Grid */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">Systolic BP (mmHg)</label>
+              <input
+                type="number"
+                required
+                value={vitals.systolic}
+                onChange={(e) => handleVitalChange('systolic', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">Diastolic BP (mmHg)</label>
+              <input
+                type="number"
+                required
+                value={vitals.diastolic}
+                onChange={(e) => handleVitalChange('diastolic', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">Pulse (bpm)</label>
+              <input
+                type="number"
+                required
+                value={vitals.pulse}
+                onChange={(e) => handleVitalChange('pulse', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">SpO2 Oxygen (%)</label>
+              <input
+                type="number"
+                required
+                value={vitals.spO2}
+                onChange={(e) => handleVitalChange('spO2', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">Temp (°F)</label>
+              <input
+                type="number"
+                step="0.1"
+                required
+                value={vitals.temp}
+                onChange={(e) => handleVitalChange('temp', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">Resp Rate (/min)</label>
+              <input
+                type="number"
+                required
+                value={vitals.respRate}
+                onChange={(e) => handleVitalChange('respRate', e.target.value)}
+                className="w-full px-3 py-1.5 text-sm font-black rounded-xl border border-slate-200 bg-white focus:ring-2 focus:ring-teal-600 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          {/* Field Notes & Hindi Voice Input */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Field Clinical Notes & Symptoms
+              </label>
+              {hasSupport && (
+                <button
+                  type="button"
+                  onClick={isListening ? stopListening : startListening}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all ${
+                    isListening 
+                      ? 'bg-rose-500 text-white border-rose-600 animate-pulse' 
+                      : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                  }`}
+                >
+                  {isListening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+                  <span>{isListening ? 'Listening...' : 'Voice Input (Mic)'}</span>
+                </button>
+              )}
+            </div>
+            <textarea
+              rows="3"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="e.g. Mareez ko 2 din se tez bukhar aur sar dard hai..."
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
             />
           </div>
 
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Heart className="w-3 h-3 text-rose-500" /> Diastolic BP (mmHg)
-            </label>
-            <input
-              type="number"
-              value={vitals.diastolicBP}
-              onChange={(e) => setVitals({ ...vitals, diastolicBP: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
-            />
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Activity className="w-3 h-3 text-teal-600" /> Pulse (bpm)
-            </label>
-            <input
-              type="number"
-              value={vitals.pulseRate}
-              onChange={(e) => setVitals({ ...vitals, pulseRate: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
-            />
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Wind className="w-3 h-3 text-cyan-600" /> SpO2 Oxygen (%)
-            </label>
-            <input
-              type="number"
-              value={vitals.spO2}
-              onChange={(e) => setVitals({ ...vitals, spO2: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
-            />
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Thermometer className="w-3 h-3 text-amber-500" /> Temp (°F)
-            </label>
-            <input
-              type="number"
-              step="0.1"
-              value={vitals.temperature}
-              onChange={(e) => setVitals({ ...vitals, temperature: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
-            />
-          </div>
-
-          <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-            <label className="text-[11px] font-bold text-slate-600 flex items-center gap-1 mb-1">
-              <Activity className="w-3 h-3 text-indigo-500" /> Resp Rate (/min)
-            </label>
-            <input
-              type="number"
-              value={vitals.respiratoryRate}
-              onChange={(e) => setVitals({ ...vitals, respiratoryRate: e.target.value })}
-              className="w-full bg-white px-3 py-1.5 rounded-xl border border-slate-300 font-bold text-slate-800 text-sm focus:ring-2 focus:ring-teal-600 outline-none"
-            />
-          </div>
-
-        </div>
-
-        {/* Symptoms Voice Dictation Section */}
-        <div className="mt-4">
-          <div className="flex justify-between items-center mb-1">
-            <label className="text-xs font-bold text-slate-700 uppercase">Field Clinical Notes & Symptoms</label>
+          {/* Action Footer Buttons */}
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button
               type="button"
-              onClick={toggleSpeechRecognition}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${
-                isListening ? 'bg-rose-500 text-white animate-pulse' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-              }`}
+              onClick={onClose}
+              className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
             >
-              {isListening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3 text-teal-600" />}
-              {isListening ? 'Listening (Hindi)...' : 'Voice Input (Mic)'}
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-600/20 transition-all flex items-center gap-2 disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{isSubmitting ? 'Saving Assessment...' : 'Save & Sync Assessment'}</span>
             </button>
           </div>
 
-          <textarea
-            rows={3}
-            value={symptomsText}
-            onChange={(e) => setSymptomsText(e.target.value)}
-            placeholder="e.g. Mareez ko 2 din se tez bukhar aur sar dard hai..."
-            className="w-full px-3 py-2 text-xs rounded-2xl border border-slate-300 focus:ring-2 focus:ring-teal-600 outline-none"
-          />
-        </div>
-
-        {/* Actions */}
-        <div className="flex gap-3 mt-6 pt-4 border-t border-slate-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSaveAssessment}
-            className="flex-1 py-2.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-md shadow-teal-600/20 transition-all flex items-center justify-center gap-1.5"
-          >
-            <CheckCircle2 className="w-4 h-4" />
-            Save & Sync Assessment
-          </button>
-        </div>
+        </form>
 
       </div>
     </div>

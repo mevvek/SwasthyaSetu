@@ -56,6 +56,24 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Real-time E-Prescription Relay: Doctor -> All ASHA Workers
+  socket.on('prescription_dispatched', (rxData) => {
+    console.log('💊 Prescription Dispatched by Doctor:', rxData?.patientName);
+    io.emit('prescription_dispatched', rxData);
+  });
+
+  // Real-time Patient Triage Update: ASHA -> Doctor Queue
+  socket.on('patient_queue_updated', (patientData) => {
+    console.log('📋 Patient Queue Updated:', patientData?.name, `[${patientData?.severity}]`);
+    io.emit('patient_queue_updated', patientData);
+  });
+
+  // Real-time Patient Delete / Discharge Relay
+  socket.on('patient_deleted', (patientId) => {
+    console.log('🗑️ Patient Removed from Queue:', patientId);
+    io.emit('patient_deleted', patientId);
+  });
+
   socket.on('disconnect', () => {
     console.log(`🔌 Client disconnected: ${socket.id}`);
   });
