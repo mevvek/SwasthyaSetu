@@ -30,6 +30,11 @@ export const createPatient = async (req, res) => {
       lastVitals: lastVitals || { bp: '120/80', pulse: 75, spO2: 98 }
     });
 
+    // Real-time broadcast for new patient creation
+    if (req.io) {
+      req.io.emit('patient_queue_updated', newPatient);
+    }
+
     res.status(201).json(newPatient);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -45,6 +50,12 @@ export const updatePatient = async (req, res) => {
       { new: true }
     );
     if (!updated) return res.status(404).json({ error: 'Patient not found' });
+
+    // Real-time broadcast for patient updates
+    if (req.io) {
+      req.io.emit('patient_queue_updated', updated);
+    }
+
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -56,10 +67,14 @@ export const deletePatient = async (req, res) => {
   try {
     const deleted = await Patient.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Patient not found' });
-    
-    // Clean up related triage & prescriptions
+
     await TriageRecord.deleteMany({ patientId: req.params.id });
     await Prescription.deleteMany({ patientId: req.params.id });
+
+    // Real-time broadcast for patient removal
+    if (req.io) {
+      req.io.emit('patient_deleted', req.params.id);
+    }
 
     res.json({ message: 'Patient removed from registry successfully', id: req.params.id });
   } catch (err) {
@@ -99,6 +114,26 @@ export const saveTriageAssessment = async (req, res) => {
       { new: true }
     );
 
+    // ⚡ REAL-TIME WEBSOCKET BROADCAST
+    if (req.io && updatedPatient) {
+      req.io.emit('patient_queue_updated', updatedPatient);
+
+      // Trigger high-priority alert across all connected portals
+      if (triageResult.severity === 'CRITICAL_RED') {
+        req.io.emit('critical_emergency_alert', {
+          patientId: updatedPatient._id,
+          name: updatedPatient.name,
+          age: updatedPatient.age,
+          gender: updatedPatient.gender,
+          village: updatedPatient.village,
+          category: updatedPatient.category,
+          vitals: updatedPatient.lastVitals,
+          redFlags: triageResult.redFlags,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
     res.status(201).json({ triageDoc, updatedPatient });
   } catch (err) {
     console.error('Triage Save Error:', err);
@@ -119,10 +154,17 @@ export const createPrescription = async (req, res) => {
       advice
     });
 
-    // Automatically mark patient as treated / NORMAL LOW_GREEN
-    await Patient.findByIdAndUpdate(patientId, {
-      severity: 'LOW_GREEN'
-    });
+    // Mark patient as LOW_GREEN once treated
+    const updatedPatient = await Patient.findByIdAndUpdate(
+      patientId,
+      { severity: 'LOW_GREEN' },
+      { new: true }
+    );
+
+    // Notify queue update via WebSocket
+    if (req.io && updatedPatient) {
+      req.io.emit('patient_queue_updated', updatedPatient);
+    }
 
     res.status(201).json(rx);
   } catch (err) {
@@ -158,6 +200,11 @@ export const replenishDrug = async (req, res) => {
     drug.status = 'NORMAL';
     await drug.save();
 
+    // Broadcast inventory update
+    if (req.io) {
+      req.io.emit('inventory_updated', drug);
+    }
+
     res.json(drug);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -179,6 +226,10 @@ export const syncBulkData = async (req, res) => {
 
     for (const t of triageRecords) {
       await TriageRecord.create(t);
+    }
+
+    if (req.io) {
+      req.io.emit('sync_completed_refresh');
     }
 
     res.json({ message: 'Sync completed successfully', count: patients.length + triageRecords.length });

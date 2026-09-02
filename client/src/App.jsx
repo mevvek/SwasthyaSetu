@@ -1,45 +1,40 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from './context/AuthContext';
-import Navbar from './components/Navbar';
-import Login from './pages/Login';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { SocketProvider } from './context/SocketContext';
+import Navbar from './components/common/Navbar';
+import Login from './components/auth/Login';
+import EmergencyBanner from './components/common/EmergencyBanner';
 import AshaDashboard from './components/asha/AshaDashboard';
 import DoctorDashboard from './components/doctor/DoctorDashboard';
 import AdminDashboard from './components/admin/AdminDashboard';
 
-export default function App() {
-  const { user, loading } = useAuth();
+function MainApp() {
+  const { user } = useAuth();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-slate-500 font-semibold">
-        Loading SwasthyaSetu Portal...
-      </div>
-    );
+  // Show Login page if not logged in
+  if (!user) {
+    return <Login />;
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased">
       <Navbar />
-      <main className="flex-1">
-        <Routes>
-          <Route
-            path="/"
-            element={
-              !user ? (
-                <Login />
-              ) : user.role === 'ASHA_WORKER' ? (
-                <AshaDashboard />
-              ) : user.role === 'DOCTOR' ? (
-                <DoctorDashboard />
-              ) : (
-                <AdminDashboard />
-              )
-            }
-          />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      <EmergencyBanner />
+      <main>
+        {user.role === 'ASHA_WORKER' && <AshaDashboard />}
+        {user.role === 'DOCTOR' && <DoctorDashboard />}
+        {user.role === 'ADMIN' && <AdminDashboard />}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <SocketProvider>
+        <MainApp />
+      </SocketProvider>
+    </AuthProvider>
   );
 }

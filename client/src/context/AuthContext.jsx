@@ -1,34 +1,68 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 
-const AuthContext = createContext(null);
+const AuthContext = createContext();
+
+const profiles = {
+  ASHA_WORKER: {
+    id: 'u-asha-01',
+    name: 'Sunita Devi (Field ASHA)',
+    role: 'ASHA_WORKER',
+    phcCenter: 'PHC Kunda Hub',
+    token: 'mock-jwt-token-asha'
+  },
+  DOCTOR: {
+    id: 'u-doc-01',
+    name: 'Dr. Arvind Sharma (MO)',
+    role: 'DOCTOR',
+    phcCenter: 'PHC Tele-OPD Hub',
+    token: 'mock-jwt-token-doctor'
+  },
+  ADMIN: {
+    id: 'u-admin-01',
+    name: 'District Medical Officer (Admin)',
+    role: 'ADMIN',
+    phcCenter: 'District Health Directorate',
+    token: 'mock-jwt-token-admin'
+  }
+};
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(() => {
+    const saved = localStorage.getItem('swasthya_user');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Error parsing stored user', e);
+      }
+    }
+    return null; // By default shows Login Page
+  });
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('sih_user');
-    const storedToken = localStorage.getItem('sih_token');
-    if (storedUser && storedToken) {
-      setUser(JSON.parse(storedUser));
+    if (user) {
+      localStorage.setItem('swasthya_user', JSON.stringify(user));
+      localStorage.setItem('swasthya_token', user.token || 'mock-token');
+    } else {
+      localStorage.removeItem('swasthya_user');
+      localStorage.removeItem('swasthya_token');
     }
-    setLoading(false);
-  }, []);
+  }, [user]);
 
-  const login = (userData, token) => {
-    localStorage.setItem('sih_user', JSON.stringify(userData));
-    localStorage.setItem('sih_token', token);
-    setUser(userData);
+  const loginWithRole = (role) => {
+    if (profiles[role]) {
+      setUser(profiles[role]);
+    }
   };
 
   const logout = () => {
-    localStorage.removeItem('sih_user');
-    localStorage.removeItem('sih_token');
     setUser(null);
+    localStorage.removeItem('swasthya_user');
+    localStorage.removeItem('swasthya_token');
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, loginWithRole, logout }}>
       {children}
     </AuthContext.Provider>
   );
