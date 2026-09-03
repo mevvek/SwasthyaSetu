@@ -117,7 +117,7 @@ export default function Login() {
   };
 
   return (
-    <div className="relative min-h-screen w-full flex items-center justify-end overflow-hidden bg-slate-950 font-sans">
+    <div className="relative h-screen w-full flex items-center justify-end overflow-hidden bg-slate-950 font-sans">
       
       {/* Background Slideshow Layer */}
       {BACKGROUND_SLIDES.map((slide, idx) => (
@@ -137,25 +137,28 @@ export default function Login() {
       {/* Subtle Right-Side Gradient */}
       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-slate-950/30 to-slate-950/75 pointer-events-none" />
 
-      {/* Top Header: Emergency Helpline Pill & Prominent Language Switcher */}
-      <div className="absolute top-6 right-6 sm:top-8 sm:right-12 z-30 flex items-center gap-3">
-        {/* Emergency 108 / 104 Direct Dial Helpline Pill */}
-        <div className="hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-rose-950/80 backdrop-blur-md border border-rose-500/30 text-rose-200 shadow-xl text-xs font-bold">
-          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-          <PhoneCall className="w-3.5 h-3.5 text-rose-400" />
-          <span>{lang === 'hi' ? 'राष्ट्रीय स्वास्थ्य हेल्पलाइन: 104 / 108 आपातकालीन सेवा' : 'National Health Helpline: 104 / 108 Emergency Transit'}</span>
+      {/* Top Navigation Bar: Helpline on Left, Language Switcher on Right */}
+      <div className="absolute top-3 left-4 right-4 sm:top-4 sm:left-8 sm:right-8 z-30 flex items-center justify-between pointer-events-none">
+        {/* Left Side: Emergency Helpline Pill */}
+        <div className="pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-950/85 backdrop-blur-md border border-rose-500/30 text-rose-200 shadow-xl text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping shrink-0" />
+          <PhoneCall className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span className="truncate max-w-[260px] sm:max-w-none">
+            {lang === 'hi' ? 'राष्ट्रीय स्वास्थ्य हेल्पलाइन: 104 / 108 आपातकालीन सेवा' : 'National Health Helpline: 104 / 108 Emergency Transit'}
+          </span>
         </div>
 
+        {/* Right Side: Language Switcher */}
         <button
           type="button"
           onClick={() => toggleLanguage()}
-          className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-900/80 hover:bg-slate-900 backdrop-blur-md border border-white/20 text-xs font-bold text-white shadow-xl hover:scale-105 active:scale-95 transition-all"
+          className="pointer-events-auto flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-900/85 hover:bg-slate-900 backdrop-blur-md border border-white/20 text-xs font-bold text-white shadow-xl hover:scale-105 active:scale-95 transition-all"
         >
-          <Globe className="w-4 h-4 text-teal-400" />
-          <span className="tracking-wide">
+          <Globe className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+          <span className="tracking-wide text-xs">
             {lang === 'en' ? 'हिन्दी में बदलें' : 'Switch to English'}
           </span>
-          <span className="px-1.5 py-0.5 rounded-lg bg-teal-500/20 text-[10px] font-black text-teal-300 border border-teal-500/30 uppercase">
+          <span className="px-1.5 py-0.5 rounded-md bg-teal-500/20 text-[9px] font-black text-teal-300 border border-teal-500/30 uppercase">
             {lang === 'en' ? 'HI' : 'EN'}
           </span>
         </button>
@@ -175,40 +178,40 @@ export default function Login() {
         ))}
       </div>
 
-      {/* 10% Enlarged Login Card */}
-      <div className="relative z-10 w-full max-w-[495px] my-6 mr-4 sm:mr-10 lg:mr-14 bg-white/95 backdrop-blur-md rounded-3xl shadow-2xl border border-white/30 overflow-hidden shrink-0">
+      {/* Perfectly Fitted Login Card with Enhanced Height */}
+      <div className="relative z-10 w-full max-w-[450px] mr-10 sm:mr-20 lg:mr-12 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/30 overflow-hidden shrink-0"> 
         
         {/* Top Header */}
-        <div className="bg-slate-950 p-7 text-white relative">
+        <div className="bg-slate-950 px-5 py-4 text-white relative">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3.5">
-              <div className="w-12 h-12 rounded-2xl bg-teal-500 flex items-center justify-center text-white shadow-md shadow-teal-500/30 shrink-0">
-                <Activity className="w-6 h-6 stroke-[2.5]" />
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-teal-500 flex items-center justify-center text-white shadow-md shadow-teal-500/30 shrink-0">
+                <Activity className="w-5 h-5 stroke-[2.5]" />
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-xl font-black tracking-tight text-white">SwasthyaSetu</h2>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                <div className="flex items-center gap-1.5">
+                  <h2 className="text-base font-black tracking-tight text-white">SwasthyaSetu</h2>
+                  <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
                     SIH Edition
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">{t.portalSubtitle}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">{t.portalSubtitle}</p>
               </div>
             </div>
             
-            <div className="flex flex-col items-end gap-1.5">
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-300">
-                <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-bold text-slate-300">
+                <ShieldCheck className="w-3 h-3 text-teal-400" />
                 ABDM
               </div>
               
               {/* Dynamic Offline / Online Indicator Badge */}
-              <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+              <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
                 isOnline 
                   ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300' 
                   : 'bg-amber-950/80 border-amber-500/40 text-amber-300 animate-pulse'
               }`}>
-                {isOnline ? <Wifi className="w-3 h-3 text-emerald-400" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
+                {isOnline ? <Wifi className="w-2.5 h-2.5 text-emerald-400" /> : <WifiOff className="w-2.5 h-2.5 text-amber-400" />}
                 <span>
                   {isOnline 
                     ? (lang === 'hi' ? 'सर्वर कनेक्टेड' : 'Server Live') 
@@ -218,20 +221,20 @@ export default function Login() {
             </div>
           </div>
 
-          <p className="text-xs text-slate-300 mt-3.5 leading-relaxed">
+          <p className="text-[11px] text-slate-300 mt-2 leading-snug">
             {t.portalTagline}
           </p>
         </div>
 
-        {/* Form Body with Expanded Padding */}
-        <div className="p-7 space-y-5">
+        {/* Form Body */}
+        <div className="p-5 space-y-3.5">
           
           {/* Role Select Tabs */}
           <div>
-            <label className="block text-[11px] font-black text-slate-400 uppercase tracking-wider mb-2">
+            <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider mb-1.5">
               {t.selectRole}
             </label>
-            <div className="grid grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-3 gap-2">
               {Object.entries(roleMeta).map(([roleKey, meta]) => {
                 const IconComp = meta.icon;
                 const isSelected = selectedRole === roleKey;
@@ -240,33 +243,33 @@ export default function Login() {
                     key={roleKey}
                     type="button"
                     onClick={() => handleRoleChange(roleKey)}
-                    className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center gap-1.5 ${
+                    className={`py-2 px-1.5 rounded-xl border text-center transition-all flex flex-col items-center gap-1 ${
                       isSelected
-                        ? 'border-teal-600 bg-teal-50 text-teal-950 font-bold ring-2 ring-teal-500/20 shadow-sm'
+                        ? 'border-teal-600 bg-teal-50 text-teal-950 font-bold ring-1 ring-teal-500/20 shadow-sm'
                         : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     }`}
                   >
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${isSelected ? 'bg-teal-600 text-white shadow-sm' : 'bg-white text-slate-500 border border-slate-200'}`}>
-                      <IconComp className="w-4 h-4" />
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${isSelected ? 'bg-teal-600 text-white shadow-sm' : 'bg-white text-slate-500 border border-slate-200'}`}>
+                      <IconComp className="w-3.5 h-3.5" />
                     </div>
-                    <span className="text-xs tracking-tight">{meta.tabLabel}</span>
+                    <span className="text-[11px] tracking-tight">{meta.tabLabel}</span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="mt-3 p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-start gap-2">
-              <Sparkles className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
+            <div className="mt-2 p-2 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-600 flex items-start gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-teal-600 shrink-0 mt-0.5" />
               <span className="leading-snug">{roleMeta[selectedRole].desc}</span>
             </div>
           </div>
 
           {/* Auth Mode Tabs */}
-          <div className="flex bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs font-bold">
+          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-bold">
             <button
               type="button"
               onClick={() => setLoginMethod('OTP')}
-              className={`flex-1 py-2 rounded-lg transition-all text-center ${
+              className={`flex-1 py-1.5 rounded-md transition-all text-center ${
                 loginMethod === 'OTP' ? 'bg-white text-teal-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -275,7 +278,7 @@ export default function Login() {
             <button
               type="button"
               onClick={() => setLoginMethod('PASSWORD')}
-              className={`flex-1 py-2 rounded-lg transition-all text-center ${
+              className={`flex-1 py-1.5 rounded-md transition-all text-center ${
                 loginMethod === 'PASSWORD' ? 'bg-white text-teal-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
@@ -284,25 +287,25 @@ export default function Login() {
           </div>
 
           {/* Form Fields */}
-          <form onSubmit={handleAuthSubmit} className="space-y-4">
+          <form onSubmit={handleAuthSubmit} className="space-y-3">
             {loginMethod === 'OTP' ? (
-              <div className="space-y-3.5">
+              <div className="space-y-2.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">{t.mobileLabel}</label>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">{t.mobileLabel}</label>
                   <div className="relative">
-                    <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                    <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="text"
                       required
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
-                      className="w-full pl-10 pr-24 py-2.5 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium bg-white"
+                      className="w-full pl-9 pr-20 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-600 font-medium bg-white"
                     />
                     <button
                       type="button"
                       onClick={handleSendOtp}
                       disabled={isLoading || otpSent}
-                      className="absolute right-1.5 top-1.5 px-3 py-1.5 bg-teal-100 hover:bg-teal-200 text-teal-800 rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                      className="absolute right-1 top-1 px-2.5 py-1 bg-teal-100 hover:bg-teal-200 text-teal-800 rounded text-[10px] font-bold transition-all disabled:opacity-50"
                     >
                       {otpSent ? t.resendOtp : t.sendOtp}
                     </button>
@@ -311,11 +314,11 @@ export default function Login() {
 
                 {otpSent && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
                       {t.enterOtp} ({t.demoOtpText} <span className="text-teal-600 font-mono font-bold">7482</span>)
                     </label>
                     <div className="relative">
-                      <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                      <KeyRound className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                       <input
                         type="text"
                         maxLength="4"
@@ -323,45 +326,45 @@ export default function Login() {
                         value={otp}
                         onChange={(e) => setOtp(e.target.value)}
                         placeholder="7482"
-                        className="w-full pl-10 pr-3 py-2.5 text-xs rounded-xl border border-teal-300 bg-teal-50/40 focus:outline-none focus:ring-2 focus:ring-teal-600 font-mono tracking-widest text-center font-bold text-teal-900"
+                        className="w-full pl-9 pr-2 py-2 text-xs rounded-lg border border-teal-300 bg-teal-50/40 focus:outline-none focus:ring-1 focus:ring-teal-600 font-mono tracking-widest text-center font-bold text-teal-900"
                       />
                     </div>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="space-y-3.5">
+              <div className="space-y-2.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">{t.emailLabel}</label>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">{t.emailLabel}</label>
                   <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                    <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="email"
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      className="w-full pl-10 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium bg-white"
+                      className="w-full pl-9 pr-2 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-600 font-medium bg-white"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">{t.pwdLabel}</label>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">{t.pwdLabel}</label>
                   <div className="relative">
-                    <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                    <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
                     <input
                       type="password"
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      className="w-full pl-10 pr-3 py-2.5 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium bg-white"
+                      className="w-full pl-9 pr-2 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-teal-600 font-medium bg-white"
                     />
                   </div>
                 </div>
               </div>
             )}
 
-            <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-0.5">
               <span>{t.testingAccount}</span>
               <button
                 type="button"
@@ -379,33 +382,33 @@ export default function Login() {
             <button
               type="submit"
               disabled={isLoading || (loginMethod === 'OTP' && !otpSent)}
-              className="w-full py-3.5 bg-teal-600 hover:bg-teal-700 active:scale-[0.99] text-white font-bold text-xs rounded-xl shadow-md shadow-teal-600/25 transition-all uppercase tracking-wider flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
+              className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 active:scale-[0.99] text-white font-bold text-xs rounded-lg shadow-sm shadow-teal-600/25 transition-all uppercase tracking-wider flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed mt-1"
             >
               {isLoading ? (
                 t.verifying
               ) : (
                 <>
                   {t.accessBtn} {roleMeta[selectedRole].title}
-                  <ArrowRight className="w-4 h-4" />
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </>
               )}
             </button>
           </form>
 
           {/* Security & Trust Badges Footer Strip */}
-          <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-3 text-[10px] font-semibold text-slate-400">
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="w-3 h-3 text-teal-600" />
+          <div className="pt-2.5 border-t border-slate-100 flex items-center justify-center gap-2 text-[9.5px] font-semibold text-slate-400">
+            <span className="flex items-center gap-0.5">
+              <CheckCircle2 className="w-2.5 h-2.5 text-teal-600" />
               256-Bit Encrypted
             </span>
             <span>•</span>
-            <span className="flex items-center gap-1">
-              <ShieldCheck className="w-3 h-3 text-teal-600" />
+            <span className="flex items-center gap-0.5">
+              <ShieldCheck className="w-2.5 h-2.5 text-teal-600" />
               ABDM / FHIR Ready
             </span>
             <span>•</span>
-            <span className="flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-500" />
+            <span className="flex items-center gap-0.5">
+              <Sparkles className="w-2.5 h-2.5 text-amber-500" />
               Govt of India SIH
             </span>
           </div>
