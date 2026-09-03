@@ -13,7 +13,11 @@ import {
   KeyRound, 
   ArrowRight,
   Sparkles,
-  Globe
+  Globe,
+  PhoneCall,
+  Wifi,
+  WifiOff,
+  CheckCircle2
 } from 'lucide-react';
 
 const BACKGROUND_SLIDES = [
@@ -36,6 +40,20 @@ export default function Login() {
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -119,8 +137,15 @@ export default function Login() {
       {/* Subtle Right-Side Gradient */}
       <div className="absolute inset-0 bg-gradient-to-r from-transparent via-slate-950/30 to-slate-950/75 pointer-events-none" />
 
-      {/* Prominent Language Switcher at Top-Right of the Screen/Image */}
+      {/* Top Header: Emergency Helpline Pill & Prominent Language Switcher */}
       <div className="absolute top-6 right-6 sm:top-8 sm:right-12 z-30 flex items-center gap-3">
+        {/* Emergency 108 / 104 Direct Dial Helpline Pill */}
+        <div className="hidden sm:flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-rose-950/80 backdrop-blur-md border border-rose-500/30 text-rose-200 shadow-xl text-xs font-bold">
+          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+          <PhoneCall className="w-3.5 h-3.5 text-rose-400" />
+          <span>{lang === 'hi' ? 'राष्ट्रीय स्वास्थ्य हेल्पलाइन: 104 / 108 आपातकालीन सेवा' : 'National Health Helpline: 104 / 108 Emergency Transit'}</span>
+        </div>
+
         <button
           type="button"
           onClick={() => toggleLanguage()}
@@ -171,9 +196,25 @@ export default function Login() {
               </div>
             </div>
             
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-300">
-              <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
-              ABDM
+            <div className="flex flex-col items-end gap-1.5">
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-bold text-slate-300">
+                <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                ABDM
+              </div>
+              
+              {/* Dynamic Offline / Online Indicator Badge */}
+              <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                isOnline 
+                  ? 'bg-emerald-950/80 border-emerald-500/40 text-emerald-300' 
+                  : 'bg-amber-950/80 border-amber-500/40 text-amber-300 animate-pulse'
+              }`}>
+                {isOnline ? <Wifi className="w-3 h-3 text-emerald-400" /> : <WifiOff className="w-3 h-3 text-amber-400" />}
+                <span>
+                  {isOnline 
+                    ? (lang === 'hi' ? 'सर्वर कनेक्टेड' : 'Server Live') 
+                    : (lang === 'hi' ? 'ऑफलाइन कैश सक्रिय' : 'Offline Cache Active')}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -350,6 +391,24 @@ export default function Login() {
               )}
             </button>
           </form>
+
+          {/* Security & Trust Badges Footer Strip */}
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-3 text-[10px] font-semibold text-slate-400">
+            <span className="flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3 text-teal-600" />
+              256-Bit Encrypted
+            </span>
+            <span>•</span>
+            <span className="flex items-center gap-1">
+              <ShieldCheck className="w-3 h-3 text-teal-600" />
+              ABDM / FHIR Ready
+            </span>
+            <span>•</span>
+            <span className="flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-amber-500" />
+              Govt of India SIH
+            </span>
+          </div>
 
         </div>
 
