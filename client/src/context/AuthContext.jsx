@@ -27,23 +27,27 @@ const profiles = {
 };
 
 export const AuthProvider = ({ children }) => {
+  // Always start with null so fresh launch/tab strictly lands on Login Gateway
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('swasthya_user');
+    // sessionStorage maintains state on page reload, but resets when tab/browser restarts
+    const saved = sessionStorage.getItem('swasthya_user');
     if (saved) {
       try {
         return JSON.parse(saved);
       } catch (e) {
-        console.error('Error parsing stored user', e);
+        console.error('Error parsing stored session', e);
       }
     }
-    return null; // By default shows Login Page
+    return null; // By default ALWAYS show Login
   });
 
   useEffect(() => {
     if (user) {
-      localStorage.setItem('swasthya_user', JSON.stringify(user));
-      localStorage.setItem('swasthya_token', user.token || 'mock-token');
+      sessionStorage.setItem('swasthya_user', JSON.stringify(user));
+      sessionStorage.setItem('swasthya_token', user.token || 'mock-token');
     } else {
+      sessionStorage.removeItem('swasthya_user');
+      sessionStorage.removeItem('swasthya_token');
       localStorage.removeItem('swasthya_user');
       localStorage.removeItem('swasthya_token');
     }
@@ -57,8 +61,8 @@ export const AuthProvider = ({ children }) => {
 
   const logout = () => {
     setUser(null);
-    localStorage.removeItem('swasthya_user');
-    localStorage.removeItem('swasthya_token');
+    sessionStorage.clear();
+    localStorage.clear();
   };
 
   return (

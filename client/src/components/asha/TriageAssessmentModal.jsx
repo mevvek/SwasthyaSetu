@@ -1,9 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Heart, 
   Activity, 
-  Thermometer, 
-  Wind, 
   AlertTriangle, 
   CheckCircle2, 
   Mic, 
@@ -20,19 +17,56 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
   const { lang } = useLanguage();
   const { isListening, transcript, startListening, stopListening } = useSpeechRecognition();
 
+  // Initial State Setup: Check patient existing data, else default values
   const [systolic, setSystolic] = useState(patient?.lastTriage?.bpSystolic || '120');
   const [diastolic, setDiastolic] = useState(patient?.lastTriage?.bpDiastolic || '80');
   const [pulse, setPulse] = useState(patient?.lastTriage?.pulse || '72');
   const [spo2, setSpo2] = useState(patient?.lastTriage?.spo2 || '98');
   const [temp, setTemp] = useState(patient?.lastTriage?.temp || '98.6');
   const [respRate, setRespRate] = useState(patient?.lastTriage?.respRate || '18');
-  const [clinicalNotes, setClinicalNotes] = useState(patient?.fieldNotes || patient?.lastTriage?.notes || '');
+  
+  // Specific notes: Strictly blank if this patient has no notes recorded
+  const [clinicalNotes, setClinicalNotes] = useState(
+    patient?.lastTriage?.notes || patient?.fieldNotes || ''
+  );
 
-  // Dynamic Extra Parameters State
-  const [customVitals, setCustomVitals] = useState(patient?.lastTriage?.customVitals || []);
+  // Dynamic Extra Parameters State: Strictly empty array if not saved for this patient
+  const [customVitals, setCustomVitals] = useState(
+    patient?.lastTriage?.customVitals || patient?.customVitals || []
+  );
+  
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [customTitle, setCustomTitle] = useState('');
   const [customValue, setCustomValue] = useState('');
+
+  // Re-sync states whenever `patient` prop changes
+  useEffect(() => {
+    if (patient) {
+      setSystolic(patient.lastTriage?.bpSystolic || '120');
+      setDiastolic(patient.lastTriage?.bpDiastolic || '80');
+      setPulse(patient.lastTriage?.pulse || '72');
+      setSpo2(patient.lastTriage?.spo2 || '98');
+      setTemp(patient.lastTriage?.temp || '98.6');
+      setRespRate(patient.lastTriage?.respRate || '18');
+      
+      // Blank if this patient has no previous note
+      setClinicalNotes(patient.lastTriage?.notes || patient.fieldNotes || '');
+      
+      // Blank array if this patient has no custom parameters
+      setCustomVitals(patient.lastTriage?.customVitals || patient.customVitals || []);
+      
+      setIsAddingCustom(false);
+      setCustomTitle('');
+      setCustomValue('');
+    }
+  }, [patient?._id, patient?.id]);
+
+  // Sync mic voice transcript into clinicalNotes
+  useEffect(() => {
+    if (transcript) {
+      setClinicalNotes((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    }
+  }, [transcript]);
 
   // Evaluate single custom vital severity
   const evaluateCustomVital = (title, valStr) => {
@@ -51,8 +85,8 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
 
     // 2. Blood Sugar / Glucose (Random mg/dL)
     if (tLower.includes('sugar') || tLower.includes('glucose') || tLower.includes('rbs') || tLower.includes('fbs')) {
-      if (val >= 250 || val < 60) return { severity: 'RED', text: 'CRITICAL SUGAR', flag: `Critical Blood Sugar (${val} mg/dL)` };
-      if (val >= 180 || val < 70) return { severity: 'YELLOW', text: 'ABNORMAL SUGAR', flag: `Elevated Sugar (${val} mg/dL)` };
+      if (val >= 200 || val < 60) return { severity: 'RED', text: 'CRITICAL SUGAR', flag: `Critical Blood Sugar (${val} mg/dL)` };
+      if (val >= 140 || val < 70) return { severity: 'YELLOW', text: 'ABNORMAL SUGAR', flag: `Elevated Sugar (${val} mg/dL)` };
       return { severity: 'GREEN', text: 'NORMAL' };
     }
 
@@ -63,7 +97,7 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
       return { severity: 'GREEN', text: 'NORMAL' };
     }
 
-    // 4. Generic / Other numbers (fallback threshold for extreme values)
+    // 4. Generic / Other numbers
     if (val >= 200 || val <= 30) {
       return { severity: 'YELLOW', text: 'ABNORMAL', flag: `Abnormal ${title} (${val})` };
     }
@@ -155,15 +189,28 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
 
   const triageResult = calculateUrgency();
 
-const handleSaveTriage = async () => {
+  const handleSaveTriage = async () => {
+    const isRed = triageResult.level.includes('RED');
+    const isYellow = triageResult.level.includes('YELLOW');
+
+    // Extract Sugar if added in custom vitals
+    const sugarVital = customVitals.find(cv => 
+      cv.title && /(sugar|glucose|rbs|fbs)/i.test(cv.title)
+    );
+    const parsedSugar = sugarVital ? parseFloat(sugarVital.value) : undefined;
+
+    const targetId = patient?._id || patient?.id;
+
     const triageRecord = {
-      severity: triageResult.level.includes('RED') ? 'RED' : triageResult.level.includes('YELLOW') ? 'YELLOW' : 'GREEN',
+      severity: isRed ? 'RED' : isYellow ? 'YELLOW' : 'GREEN',
       bpSystolic: Number(systolic),
       bpDiastolic: Number(diastolic),
       pulse: Number(pulse),
       spo2: Number(spo2),
       temp: Number(temp),
       respRate: Number(respRate),
+      sugar: parsedSugar,
+      bloodSugar: parsedSugar,
       notes: clinicalNotes,
       customVitals,
       timestamp: new Date().toISOString()
@@ -171,55 +218,62 @@ const handleSaveTriage = async () => {
 
     const updatedPatient = {
       ...patient,
+      _id: targetId,
+      id: targetId,
+      severity: isRed ? 'CRITICAL_RED' : isYellow ? 'MODERATE_YELLOW' : 'LOW_GREEN',
+      lastVitals: {
+        bp: `${systolic}/${diastolic}`,
+        pulse: Number(pulse),
+        spO2: Number(spo2),
+        temp: Number(temp) || 98.6,
+        sugar: parsedSugar,
+        bloodSugar: parsedSugar
+      },
       lastTriage: triageRecord,
-      severity: triageResult.level.includes('RED') ? 'CRITICAL_RED' : triageResult.level.includes('YELLOW') ? 'MODERATE_YELLOW' : 'LOW_GREEN',
+      customVitals: customVitals,
       fieldNotes: clinicalNotes,
       status: 'QUEUED_FOR_TELEOPD',
       teleConsultRequested: true,
+      hasNewUpdate: true,
       updatedAt: new Date().toISOString()
     };
 
     try {
-      // 1. Local IndexedDB save
-      await db.patients.put(updatedPatient);
+      // 1. Local IndexedDB update (same ID overwrite)
+      if (db?.patients) {
+        await db.patients.put(updatedPatient);
+      }
 
-      // 2. Direct Backend Sync (Check MongoDB real ObjectId vs Mock ID)
-      const targetId = patient._id || patient.id;
-      let syncSuccess = false;
+      // 2. Direct Backend Sync (Strictly In-Place PUT/PATCH)
+      if (targetId) {
+        const res = await fetch(`/api/patients/${targetId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updatedPatient)
+        });
 
-      if (targetId && !String(targetId).startsWith('pat_')) {
-        // Real MongoDB ID hai toh PUT update karega
-        try {
-          const res = await fetch(`/api/patients/${targetId}`, {
-            method: 'PUT',
+        if (!res.ok) {
+          await fetch(`/api/patients/${targetId}`, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatedPatient)
           });
-          if (res.ok) syncSuccess = true;
-        } catch (e) {
-          console.warn('PUT failed, trying fallback...');
         }
       }
 
-      // Agar mock id thi ya record server par nahi tha, toh naya POST karega
-      if (!syncSuccess) {
-        const { _id, id, ...cleanData } = updatedPatient;
-        const postRes = await fetch('/api/patients', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cleanData)
-        });
-        if (postRes.ok) {
-          const savedData = await postRes.json();
-          // Server se mili real _id IndexedDB me update kar dega
-          await db.patients.put({ ...updatedPatient, _id: savedData._id, id: savedData._id });
-        }
+      // 3. Sync to Doctor Dashboard via BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('swasthya_teleopd_channel');
+        bc.postMessage({ type: 'PATIENT_TRIAGE_UPDATED', payload: updatedPatient });
+        bc.close();
+      } catch (bcErr) {
+        console.warn('Broadcast sync error:', bcErr);
       }
 
       if (onSaved) onSaved(updatedPatient);
       onClose();
     } catch (err) {
-      console.error('Triage sync error:', err);
+      console.error('Triage update error:', err);
       if (onSaved) onSaved(updatedPatient);
       onClose();
     }
@@ -385,7 +439,7 @@ const handleSaveTriage = async () => {
               />
             </div>
 
-            {/* Added Custom Parameter Cards with Dynamic Red/Yellow/Green Feedback */}
+            {/* Added Custom Parameter Cards */}
             {customVitals.map((item) => {
               const status = evaluateCustomVital(item.title, item.value);
               
@@ -446,7 +500,7 @@ const handleSaveTriage = async () => {
                   <input
                     type="text"
                     autoFocus
-                    placeholder="Title (e.g. Temp, Sugar)"
+                    placeholder="Title (e.g. Sugar, Hb)"
                     value={customTitle}
                     onChange={(e) => setCustomTitle(e.target.value)}
                     className="w-full px-2.5 py-1 text-xs rounded-lg border border-slate-300 font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-600"
@@ -454,7 +508,7 @@ const handleSaveTriage = async () => {
                   <input
                     type="number"
                     step="any"
-                    placeholder="Value (e.g. 105)"
+                    placeholder="Value (e.g. 250)"
                     value={customValue}
                     onChange={(e) => setCustomValue(e.target.value)}
                     className="w-full px-2.5 py-1 text-xs rounded-lg border border-slate-300 font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-teal-600"
@@ -477,7 +531,7 @@ const handleSaveTriage = async () => {
                     onClick={handleAddCustomVital}
                     className="px-2.5 py-1 text-[10px] font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg flex items-center gap-1 shadow-xs"
                   >
-                    <Check className="w-3 h-3" />
+                    <Check className="w-3.5 h-3.5" />
                     <span>OK</span>
                   </button>
                 </div>
@@ -539,7 +593,7 @@ const handleSaveTriage = async () => {
           <button
             type="button"
             onClick={handleSaveTriage}
-            className="px-5 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-md shadow-teal-600/20 transition-all flex items-center gap-1.5"
+            className="px-5 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-xl shadow-md shadow-teal-600/20 transition-all flex items-center gap-1.5 active:scale-95"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>{lang === 'hi' ? 'सुरक्षित करें एवं सिंक करें' : 'Save & Sync Assessment'}</span>

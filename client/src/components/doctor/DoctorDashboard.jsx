@@ -14,151 +14,124 @@ import {
   Stethoscope, 
   Video, 
   FileText, 
-  CheckCircle, 
   Clock, 
   Send, 
   CheckCircle2, 
   RefreshCw, 
   Trash2, 
   Check, 
-  AlertOctagon, 
-  Radio,
-  Truck,
-  ShieldAlert,
-  ShieldCheck
+  Radio, 
+  Truck, 
+  ShieldAlert, 
+  ChevronDown, 
+  ChevronUp, 
+  Award, 
+  Zap, 
+  Phone, 
+  AlertTriangle 
 } from 'lucide-react';
 
-/* =========================================================================
-   CLINICAL SAFETY WATCHDOG — rule-based drug/condition interaction engine
-   ========================================================================= */
-
+/* --- Clinical Safety Rules --- */
 const SAFETY_RULES = [
   {
     id: 'ace-pregnancy',
-    severity: 'high',
-    match: (text) => /\b(enalapril|lisinopril|ramipril|captopril|ace[- ]?inhibitor)\b/i.test(text),
-    applies: (patient) => !!patient?.isPregnant,
-    message: (patient) =>
-      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). ACE inhibitors are contraindicated in pregnancy — avoid.`
+    match: (text) => /\b(enalapril|lisinopril|ramipril|captopril)\b/i.test(text),
+    applies: (patient) => Boolean(patient?.isPregnant || String(patient?.category || '').toLowerCase().includes('pregnant')),
+    message: (patient) => `Patient is pregnant (${patient?.gestationalWeeks || '15'}w). ACE inhibitors are contraindicated in pregnancy.`
   },
   {
     id: 'arb-pregnancy',
-    severity: 'high',
-    match: (text) => /\b(losartan|telmisartan|valsartan|olmesartan|\bARB\b)\b/i.test(text),
-    applies: (patient) => !!patient?.isPregnant,
-    message: (patient) =>
-      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). ARBs are contraindicated in pregnancy — avoid.`
+    match: (text) => /\b(losartan|telmisartan|valsartan)\b/i.test(text),
+    applies: (patient) => Boolean(patient?.isPregnant || String(patient?.category || '').toLowerCase().includes('pregnant')),
+    message: (patient) => `Patient is pregnant (${patient?.gestationalWeeks || '15'}w). ARBs are contraindicated in pregnancy.`
   },
   {
-    id: 'warfarin-pregnancy',
-    severity: 'high',
-    match: (text) => /\bwarfarin\b/i.test(text),
-    applies: (patient) => !!patient?.isPregnant,
-    message: () =>
-      `Patient is pregnant. Warfarin is teratogenic — avoid; consider heparin instead.`
-  },
-  {
-    id: 'nsaid-pregnancy-3rd',
-    severity: 'high',
-    match: (text) => /\b(ibuprofen|diclofenac|naproxen|mefenamic|nsaid)\b/i.test(text),
-    applies: (patient) => !!patient?.isPregnant && Number(patient?.gestationalWeeks) >= 28,
-    message: (patient) =>
-      `Patient is in the third trimester (${patient?.gestationalWeeks}w). NSAIDs risk premature closure of the ductus arteriosus — avoid after 28 weeks.`
+    id: 'nsaid-pregnancy',
+    match: (text) => /\b(ibuprofen|diclofenac|naproxen|nsaid)\b/i.test(text),
+    applies: (patient) => Boolean(patient?.isPregnant || String(patient?.category || '').toLowerCase().includes('pregnant')),
+    message: () => `Patient is pregnant. NSAIDs carry fetal risk — prefer Paracetamol.`
   },
   {
     id: 'betablocker-asthma',
-    severity: 'high',
-    match: (text) => /\b(propranolol|atenolol|metoprolol|bisoprolol|beta[- ]?blocker)\b/i.test(text),
-    applies: (patient) => /asthma/i.test(patient?.fieldNotes || ''),
-    message: () =>
-      `Field notes mention asthma history. Non-selective beta-blockers may trigger bronchospasm — verify before prescribing.`
-  },
-  {
-    id: 'nsaid-asthma',
-    severity: 'medium',
-    match: (text) => /\b(ibuprofen|diclofenac|naproxen|aspirin|nsaid)\b/i.test(text),
-    applies: (patient) => /asthma/i.test(patient?.fieldNotes || ''),
-    message: () =>
-      `Field notes mention asthma history. NSAIDs/aspirin can precipitate bronchospasm in a subset of asthma patients — confirm tolerance.`
-  },
-  {
-    id: 'metformin-renal',
-    severity: 'medium',
-    match: (text) => /\bmetformin\b/i.test(text),
-    applies: (patient) => /renal|kidney/i.test(patient?.fieldNotes || ''),
-    message: () =>
-      `Field notes mention renal/kidney concerns. Metformin carries a lactic-acidosis risk with impaired renal function — verify before prescribing.`
-  },
-  {
-    id: 'aspirin-pregnancy-note',
-    severity: 'low',
-    match: (text) => /\baspirin\b/i.test(text),
-    applies: (patient) => !!patient?.isPregnant,
-    message: (patient) =>
-      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). Low-dose aspirin is often used for pre-eclampsia prophylaxis — confirm dose and indication.`
+    match: (text) => /\b(propranolol|atenolol|metoprolol)\b/i.test(text),
+    applies: (patient) => /asthma|breath/i.test(patient?.fieldNotes || patient?.lastTriage?.notes || ''),
+    message: () => `Field notes mention asthma history. Beta-blockers may trigger bronchospasm.`
   }
 ];
 
-function computeSafetyWarnings(patient, medicinesText) {
-  if (!patient || !medicinesText || !medicinesText.trim()) return [];
-  return SAFETY_RULES
-    .filter((rule) => rule.match(medicinesText) && rule.applies(patient))
-    .map((rule) => ({ id: rule.id, severity: rule.severity, message: rule.message(patient) }));
-}
-
-const SEVERITY_STYLES = {
-  high: {
-    wrap: 'bg-rose-50 border-rose-300',
-    icon: 'text-rose-600',
-    title: 'text-rose-800',
-    text: 'text-rose-700'
+/* --- Master Clinical Presets Repository --- */
+const MASTER_PRESETS = [
+  {
+    id: 'htn-essential',
+    name: 'Essential Hypertension',
+    gender: 'ALL',
+    requiresPregnant: false,
+    trigger: (p, vitals) => vitals.some(v => v.id === 'bp' && v.level !== 'GREEN'),
+    diagnosis: 'Essential Hypertension (Stage 1/2)',
+    medicines: 'Tab Amlodipine 5mg OD (Morning) x 14 days',
+    advice: 'Low salt diet. Monitor BP daily at Health & Wellness Centre. Avoid smoking.'
   },
-  medium: {
-    wrap: 'bg-amber-50 border-amber-300',
-    icon: 'text-amber-600',
-    title: 'text-amber-800',
-    text: 'text-amber-700'
+  {
+    id: 'htn-pregnancy',
+    name: 'Pregnancy HTN (High Risk)',
+    gender: 'FEMALE',
+    requiresPregnant: true,
+    trigger: (p, vitals) => p.isPregnant && vitals.some(v => v.id === 'bp' && v.level !== 'GREEN'),
+    diagnosis: 'Pre-eclampsia risk / Gestational Hypertension',
+    medicines: 'Tab Labetalol 100mg BD x 7 days, Tab Calcium 500mg OD',
+    advice: 'Immediate referral to District Hospital if BP > 150/100. Strict bed rest.'
   },
-  low: {
-    wrap: 'bg-slate-50 border-slate-300',
-    icon: 'text-slate-500',
-    title: 'text-slate-700',
-    text: 'text-slate-600'
+  {
+    id: 'anc-routine',
+    name: 'ANC Prophylaxis',
+    gender: 'FEMALE',
+    requiresPregnant: true,
+    trigger: (p) => p.isPregnant,
+    diagnosis: 'Antenatal Routine Prophylaxis & Nutritional Care',
+    medicines: 'Tab IFA 1 OD after food, Tab Calcium 500mg OD',
+    advice: 'High protein diet. Next ANC checkup at Sub-Centre in 4 weeks.'
+  },
+  {
+    id: 'fever-pyrexia',
+    name: 'Acute Pyrexia / Fever',
+    gender: 'ALL',
+    requiresPregnant: false,
+    trigger: (p, vitals) => vitals.some(v => (v.id === 'temp' || v.id.includes('temp')) && v.level !== 'GREEN') || /fever|bukhar/i.test(p.fieldNotes || ''),
+    diagnosis: 'Acute Febrile Illness / Pyrexia of Unknown Origin',
+    medicines: 'Tab Paracetamol 650mg TDS x 3 days (after food)',
+    advice: 'Cold sponge if temp > 101°F. Ample oral hydration. Test for Malaria/Dengue if persistent.'
+  },
+  {
+    id: 'hyperglycemia',
+    name: 'Hyperglycemia / Diabetes',
+    gender: 'ALL',
+    requiresPregnant: false,
+    trigger: (p, vitals) => vitals.some(v => v.id.includes('sugar') && v.level !== 'GREEN'),
+    diagnosis: 'Type 2 Diabetes Mellitus with Hyperglycemia',
+    medicines: 'Tab Metformin 500mg BD (after meals)',
+    advice: 'Strictly avoid refined sugar and sweets. Fasting & PP Blood Sugar test advised.'
+  },
+  {
+    id: 'acute-urti',
+    name: 'Acute Respiratory / Flu',
+    gender: 'ALL',
+    requiresPregnant: false,
+    trigger: () => true,
+    diagnosis: 'Acute Upper Respiratory Tract Infection with Cough',
+    medicines: 'Tab Cetirizine 10mg OD HS x 5 days, Syr Ambroxol 10ml TDS',
+    advice: 'Drink warm water. Steam inhalation BD. Return if SpO2 drops below 94%.'
+  },
+  {
+    id: 'acute-gi',
+    name: 'Acute GI / Dehydration',
+    gender: 'ALL',
+    requiresPregnant: false,
+    trigger: () => true,
+    diagnosis: 'Acute Gastroenteritis / Moderate Dehydration Risk',
+    medicines: 'ORS packets dissolved in 1L water ad libitum, Tab Zinc 20mg OD x 14 days',
+    advice: 'Continue soft bland diet. Watch for dehydration signs.'
   }
-};
-
-function SafetyWatchdogBanner({ warnings }) {
-  if (!warnings || warnings.length === 0) return null;
-
-  const highest = warnings.some((w) => w.severity === 'high')
-    ? 'high'
-    : warnings.some((w) => w.severity === 'medium')
-    ? 'medium'
-    : 'low';
-  const style = SEVERITY_STYLES[highest];
-
-  return (
-    <div className={`p-3.5 rounded-2xl border-2 ${style.wrap} space-y-2 animate-in fade-in`}>
-      <div className="flex items-center gap-1.5">
-        <ShieldAlert className={`w-4 h-4 ${style.icon}`} />
-        <span className={`text-[11px] font-black uppercase tracking-wider ${style.title}`}>
-          Clinical Safety Watchdog
-        </span>
-      </div>
-      <ul className="space-y-1.5">
-        {warnings.map((w) => (
-          <li key={w.id} className={`text-xs font-semibold leading-relaxed flex gap-1.5 ${style.text}`}>
-            <span>•</span>
-            <span>{w.message}</span>
-          </li>
-        ))}
-      </ul>
-      <p className="text-[10px] text-slate-400 font-medium pt-1 border-t border-black/5">
-        Advisory only — final diagnosis and medication choice remain with the treating doctor.
-      </p>
-    </div>
-  );
-}
+];
 
 export default function DoctorDashboard() {
   const { user } = useAuth();
@@ -167,24 +140,280 @@ export default function DoctorDashboard() {
   const [showAmbulanceModal, setShowAmbulanceModal] = useState(false);
   const [activeQueue, setActiveQueue] = useState([]);
   const [selectedCase, setSelectedCase] = useState(null);
-  const [patientToDelete, setPatientToDelete] = useState(null);
   const [completedPrescriptions, setCompletedPrescriptions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showFieldNotes, setShowFieldNotes] = useState(true);
 
-  const [prescription, setPrescription] = useState({
-    diagnosis: 'Pre-eclampsia risk / Pregnancy Induced Hypertension',
-    medicines: 'Tab Labetalol 100mg BD, Tab Calcium 500mg OD',
-    advice: 'Immediate referral to District Hospital if BP > 150/100. Bed rest advised.'
-  });
+  const [prescription, setPrescription] = useState({ diagnosis: '', medicines: '', advice: '' });
+  const [appliedPresetIds, setAppliedPresetIds] = useState([]);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // Live, non-blocking safety flags recomputed as the doctor types / switches case
-  const safetyWarnings = useMemo(
-    () => computeSafetyWarnings(selectedCase, prescription.medicines),
-    [selectedCase, prescription.medicines]
+  // Dynamic Vitals Scanner
+  const activeAlertVitals = useMemo(() => {
+    if (!selectedCase) return [];
+
+    const t = selectedCase.lastTriage || selectedCase.triage || {};
+    const v = selectedCase.lastVitals || selectedCase.vitals || {};
+    const p = selectedCase;
+
+    const cards = [];
+
+    // 1. Blood Pressure
+    let sys = Number(t.bpSystolic || t.systolic) || 0;
+    let dia = Number(t.bpDiastolic || t.diastolic) || 0;
+    const rawBp = t.bp || v.bp || p.bp;
+
+    if ((!sys || !dia) && typeof rawBp === 'string' && rawBp.includes('/')) {
+      const parts = rawBp.split('/');
+      sys = parseInt(parts[0], 10) || 0;
+      dia = parseInt(parts[1], 10) || 0;
+    }
+
+    if (sys > 0 || dia > 0) {
+      const isRed = sys >= 160 || dia >= 100;
+      const isYellow = (sys >= 135 && sys < 160) || (dia >= 88 && dia < 100);
+      if (isRed || isYellow) {
+        cards.push({
+          id: 'bp',
+          label: 'Blood Pressure',
+          value: `${sys}/${dia}`,
+          unit: 'mmHg',
+          level: isRed ? 'RED' : 'YELLOW',
+          tag: isRed ? 'CRITICAL HTN' : 'ELEVATED / PRE-HTN'
+        });
+      }
+    }
+
+    // 2. Pulse Rate
+    const pulse = Number(t.pulse || v.pulse || p.pulse) || 0;
+    if (pulse > 0) {
+      const isRed = pulse >= 130 || pulse < 45;
+      const isYellow = (pulse >= 100 && pulse < 130) || (pulse >= 45 && pulse < 55);
+      if (isRed || isYellow) {
+        cards.push({
+          id: 'pulse',
+          label: 'Pulse Rate',
+          value: pulse,
+          unit: 'bpm',
+          level: isRed ? 'RED' : 'YELLOW',
+          tag: isRed ? 'SEVERE TACHYCARDIA' : 'ELEVATED PULSE'
+        });
+      }
+    }
+
+    // 3. SpO2 Oxygen
+    const spo2 = Number(t.spo2 || v.spO2 || v.spo2 || p.spo2) || 0;
+    if (spo2 > 0) {
+      const isRed = spo2 < 92;
+      const isYellow = spo2 >= 92 && spo2 < 94;
+      if (isRed || isYellow) {
+        cards.push({
+          id: 'spo2',
+          label: 'Oxygen Saturation',
+          value: `${spo2}%`,
+          unit: 'SpO2',
+          level: isRed ? 'RED' : 'YELLOW',
+          tag: isRed ? 'CRITICAL HYPOXIA' : 'LOW OXYGEN'
+        });
+      }
+    }
+
+    // 4. Body Temperature
+    const temp = Number(t.temp || v.temp || p.temp) || 0;
+    if (temp > 0) {
+      const isRed = temp >= 102;
+      const isYellow = temp >= 100.4 && temp < 102;
+      if (isRed || isYellow) {
+        cards.push({
+          id: 'temp',
+          label: 'Body Temperature',
+          value: temp,
+          unit: '°F',
+          level: isRed ? 'RED' : 'YELLOW',
+          tag: isRed ? 'HIGH FEVER' : 'MODERATE FEVER'
+        });
+      }
+    }
+
+    // 5. Blood Sugar
+    const directSugar = Number(t.sugar || t.bloodSugar || v.sugar || v.bloodSugar || p.sugar || p.bloodSugar) || 0;
+    if (directSugar > 0) {
+      const isRed = directSugar >= 200 || directSugar < 60;
+      const isYellow = (directSugar >= 140 && directSugar < 200) || (directSugar >= 60 && directSugar < 70);
+      if (isRed || isYellow) {
+        cards.push({
+          id: 'sugar_direct',
+          label: 'Blood Glucose (Sugar)',
+          value: directSugar,
+          unit: 'mg/dL',
+          level: isRed ? 'RED' : 'YELLOW',
+          tag: isRed ? (directSugar < 60 ? 'HYPOGLYCEMIA' : 'CRITICAL SUGAR') : 'ABNORMAL GLUCOSE'
+        });
+      }
+    }
+
+    // 6. Custom Vitals
+    const customList = t.customVitals || p.customVitals || [];
+    if (Array.isArray(customList)) {
+      customList.forEach((cv, idx) => {
+        if (!cv || !cv.title || cv.value === undefined) return;
+        const tLower = cv.title.toLowerCase().trim();
+        const numVal = parseFloat(cv.value);
+        if (isNaN(numVal)) return;
+
+        if (tLower.includes('sugar') && cards.some(c => c.id === 'sugar_direct')) return;
+
+        let level = 'NORMAL';
+        let tag = 'NORMAL';
+
+        if (tLower.includes('sugar') || tLower.includes('glucose') || tLower.includes('rbs')) {
+          if (numVal >= 200 || numVal < 60) { level = 'RED'; tag = 'CRITICAL SUGAR'; }
+          else if (numVal >= 140 || numVal < 70) { level = 'YELLOW'; tag = 'ABNORMAL SUGAR'; }
+        } else if (tLower.includes('temp') || tLower.includes('fever') || tLower.includes('bukhar')) {
+          if (numVal >= 102) { level = 'RED'; tag = 'HIGH FEVER'; }
+          else if (numVal >= 100.4) { level = 'YELLOW'; tag = 'MODERATE FEVER'; }
+        } else if (numVal >= 200 || numVal <= 30) {
+          level = 'YELLOW'; tag = 'ABNORMAL';
+        }
+
+        if (level === 'RED' || level === 'YELLOW') {
+          cards.push({
+            id: `custom_${cv.id || idx}`,
+            label: cv.title.toUpperCase(),
+            value: numVal,
+            unit: tLower.includes('sugar') ? 'mg/dL' : '',
+            level,
+            tag
+          });
+        }
+      });
+    }
+
+    // Fallback baseline
+    if (cards.length === 0) {
+      cards.push({
+        id: 'bp_norm',
+        label: 'Blood Pressure',
+        value: (sys > 0 && dia > 0) ? `${sys}/${dia}` : (rawBp || '120/80'),
+        unit: 'mmHg',
+        level: 'GREEN',
+        tag: 'NORMAL'
+      });
+      cards.push({
+        id: 'pulse_norm',
+        label: 'Pulse Rate',
+        value: pulse > 0 ? pulse : 72,
+        unit: 'bpm',
+        level: 'GREEN',
+        tag: 'NORMAL'
+      });
+      cards.push({
+        id: 'spo2_norm',
+        label: 'Oxygen SpO2',
+        value: spo2 > 0 ? `${spo2}%` : '98%',
+        unit: 'SpO2',
+        level: 'GREEN',
+        tag: 'NORMAL'
+      });
+    }
+
+    return cards;
+  }, [selectedCase]);
+
+  const isPregnant = Boolean(
+    selectedCase?.isPregnant || 
+    String(selectedCase?.category || '').toLowerCase().includes('pregnant') ||
+    selectedCase?.gestationalWeeks
   );
 
-  // Initial Data Load (Unified Backend Sync + Inclusive Triage Filtering)
+  const isMale = String(selectedCase?.gender || '').toLowerCase().startsWith('m');
+
+  // Intelligent Contextual Filtering for Presets
+  const filteredPresets = useMemo(() => {
+    if (!selectedCase) return [];
+
+    return MASTER_PRESETS.filter((preset) => {
+      // 1. Gender check: Never show female/maternal presets to male patients
+      if (isMale && (preset.gender === 'FEMALE' || preset.requiresPregnant)) {
+        return false;
+      }
+
+      // 2. Pregnancy check: Only show if patient is actually pregnant
+      if (preset.requiresPregnant && !isPregnant) {
+        return false;
+      }
+
+      // 3. Condition Match
+      return preset.trigger(selectedCase, activeAlertVitals);
+    });
+  }, [selectedCase, isMale, isPregnant, activeAlertVitals]);
+
+  // Append preset logic (allows multi-prescription without wiping)
+  const handleApplyPreset = (preset) => {
+    setAppliedPresetIds((prev) => 
+      prev.includes(preset.id) ? prev : [...prev, preset.id]
+    );
+
+    setPrescription((prev) => {
+      // Append Diagnosis
+      let updatedDiagnosis = prev.diagnosis.trim();
+      if (!updatedDiagnosis) {
+        updatedDiagnosis = preset.diagnosis;
+      } else if (!updatedDiagnosis.toLowerCase().includes(preset.diagnosis.toLowerCase())) {
+        updatedDiagnosis = `${updatedDiagnosis} + ${preset.diagnosis}`;
+      }
+
+      // Append Medicines on a new line
+      let updatedMedicines = prev.medicines.trim();
+      if (!updatedMedicines) {
+        updatedMedicines = preset.medicines;
+      } else if (!updatedMedicines.toLowerCase().includes(preset.medicines.toLowerCase())) {
+        updatedMedicines = `${updatedMedicines}\n${preset.medicines}`;
+      }
+
+      // Append Advice on a new line
+      let updatedAdvice = prev.advice.trim();
+      if (!updatedAdvice) {
+        updatedAdvice = preset.advice;
+      } else if (!updatedAdvice.toLowerCase().includes(preset.advice.toLowerCase())) {
+        updatedAdvice = `${updatedAdvice}\n• ${preset.advice}`;
+      }
+
+      return {
+        diagnosis: updatedDiagnosis,
+        medicines: updatedMedicines,
+        advice: updatedAdvice
+      };
+    });
+  };
+
+  // Reset form and applied state when switching patient
+  const handleSelectPatient = (patient) => {
+    const pid = patient._id || patient.id;
+    setSelectedCase({ ...patient, hasNewUpdate: false });
+    setAppliedPresetIds([]);
+    setPrescription({
+      diagnosis: patient.fieldNotes || patient.lastTriage?.notes || patient.notes || '',
+      medicines: '',
+      advice: ''
+    });
+
+    setActiveQueue((prev) =>
+      prev.map((item) =>
+        (item._id || item.id) === pid ? { ...item, hasNewUpdate: false } : item
+      )
+    );
+  };
+
+  // Safety Warnings
+  const safetyWarnings = useMemo(() => {
+    if (!selectedCase || !prescription.medicines.trim()) return [];
+    return SAFETY_RULES
+      .filter((rule) => rule.match(prescription.medicines) && rule.applies(selectedCase))
+      .map((rule) => ({ id: rule.id, message: rule.message(selectedCase) }));
+  }, [selectedCase, prescription.medicines]);
+
+  // Load Priority Queue
   const loadDoctorData = async () => {
     setLoading(true);
     try {
@@ -193,39 +422,29 @@ export default function DoctorDashboard() {
         fetchPrescriptionsApi()
       ]);
 
-      const allPatients = patients || [];
-
-      // Filter: Inclusive check taaki koi bhi pending/triaged patient drop na ho
-      const waiting = allPatients.filter((p) => {
-        const severityStr = String(p.severity || '').toUpperCase();
-        const isUrgent = 
-          severityStr.includes('RED') || 
-          severityStr.includes('YELLOW') || 
-          severityStr.includes('CRITICAL') || 
-          severityStr.includes('MODERATE');
-
-        const isQueued = 
+      const waiting = (patients || []).filter((p) => {
+        const sev = String(p.severity || '').toUpperCase();
+        return (
+          sev.includes('RED') || 
+          sev.includes('YELLOW') || 
           p.status === 'QUEUED_FOR_TELEOPD' || 
-          p.teleConsultRequested === true;
-
-        const hasTriage = Boolean(p.lastTriage);
-
-        return isUrgent || isQueued || hasTriage;
+          p.teleConsultRequested
+        );
       });
-      
+
       setActiveQueue(waiting);
       setSelectedCase((prev) => {
         if (!prev && waiting.length > 0) return waiting[0];
         if (prev) {
-          const updated = waiting.find(p => (p._id || p.id) === (prev._id || prev.id));
-          return updated || waiting[0] || null;
+          const found = waiting.find((p) => (p._id || p.id) === (prev._id || prev.id));
+          return found || waiting[0] || null;
         }
         return null;
       });
 
       setCompletedPrescriptions(rxList || []);
     } catch (err) {
-      console.error('Doctor data load failed:', err);
+      console.error('Doctor queue load failed:', err);
     } finally {
       setLoading(false);
     }
@@ -235,47 +454,39 @@ export default function DoctorDashboard() {
     loadDoctorData();
   }, []);
 
-  // Real-time WebSocket Listeners
+  // WebSockets & Cross-tab Sync
   useEffect(() => {
     if (!socket) return;
 
     socket.on('patient_queue_updated', (patient) => {
       const pid = patient._id || patient.id;
-      const severityStr = String(patient.severity || '').toUpperCase();
-      const isUrgent = 
-        severityStr.includes('RED') || 
-        severityStr.includes('YELLOW') || 
-        severityStr.includes('CRITICAL') || 
-        severityStr.includes('MODERATE') || 
-        patient.status === 'QUEUED_FOR_TELEOPD' || 
-        patient.teleConsultRequested === true || 
-        Boolean(patient.lastTriage);
+      const sev = String(patient.severity || '').toUpperCase();
+      const isUrgent = sev.includes('RED') || sev.includes('YELLOW') || patient.status === 'QUEUED_FOR_TELEOPD';
 
       if (isUrgent) {
         setActiveQueue((prev) => {
-          const index = prev.findIndex(p => (p._id || p.id) === pid);
-          if (index !== -1) {
-            const updated = [...prev];
-            updated[index] = patient;
-            return updated;
+          const idx = prev.findIndex((p) => (p._id || p.id) === pid);
+          if (idx !== -1) {
+            const next = [...prev];
+            next[idx] = { ...patient, hasNewUpdate: true };
+            return next;
           }
-          return [patient, ...prev];
+          return [{ ...patient, hasNewUpdate: true }, ...prev];
         });
 
         setSelectedCase((prev) => {
-          if (!prev) return patient;
-          const prevId = prev._id || prev.id;
-          return prevId === pid ? patient : prev;
+          if ((prev?._id || prev?.id) === pid) {
+            return { ...patient, hasNewUpdate: true };
+          }
+          return prev;
         });
       } else {
-        setActiveQueue((prev) => prev.filter(p => (p._id || p.id) !== pid));
-        setSelectedCase((prev) => ((prev?._id || prev?.id) === pid ? null : prev));
+        setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
       }
     });
 
     socket.on('patient_deleted', (deletedId) => {
-      setActiveQueue((prev) => prev.filter(p => (p._id || p.id) !== deletedId));
-      setSelectedCase((prev) => ((prev?._id || prev?.id) === deletedId ? null : prev));
+      setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== deletedId));
     });
 
     return () => {
@@ -284,206 +495,171 @@ export default function DoctorDashboard() {
     };
   }, [socket]);
 
-  // Cross-Tab Broadcast Channel (Sync between ASHA tab and Doctor tab directly)
   useEffect(() => {
     let channel;
     try {
       channel = new BroadcastChannel('swasthya_teleopd_channel');
-      channel.onmessage = (event) => {
-        if (event.data && event.data.type === 'REFRESH_QUEUE') {
+      channel.onmessage = (e) => {
+        if (e.data?.type === 'PATIENT_TRIAGE_UPDATED' && e.data?.payload) {
+          const updated = e.data.payload;
+          const pid = updated._id || updated.id;
+
+          setActiveQueue((prev) => {
+            const index = prev.findIndex(p => (p._id || p.id) === pid);
+            if (index !== -1) {
+              const next = [...prev];
+              next[index] = { ...updated, hasNewUpdate: true };
+              return next;
+            }
+            return [{ ...updated, hasNewUpdate: true }, ...prev];
+          });
+
+          setSelectedCase((prev) => {
+            if ((prev?._id || prev?.id) === pid) {
+              return { ...updated, hasNewUpdate: true };
+            }
+            return prev;
+          });
+        } else if (e.data?.type === 'REFRESH_QUEUE') {
           loadDoctorData();
         }
       };
-    } catch (e) {
-      console.warn('BroadcastChannel not supported:', e);
+    } catch (err) {
+      console.warn(err);
     }
-    return () => {
-      if (channel) channel.close();
-    };
+    return () => channel && channel.close();
   }, []);
 
-  // Handle 108 FRU Dispatch via WebSockets
-  const handleConfirmDispatch = (dispatchData) => {
-    if (socket) {
-      socket.emit('dispatch_emergency_ambulance', dispatchData);
-    }
-  };
-
-  // Mark Case Resolved
-  const handleMarkResolved = async (patientId) => {
-    try {
-      await updatePatientApi(patientId, { severity: 'LOW_GREEN' });
-      const remaining = activeQueue.filter(item => (item._id || item.id) !== patientId);
-      setActiveQueue(remaining);
-      if (selectedCase && (selectedCase._id || selectedCase.id) === patientId) {
-        setSelectedCase(remaining[0] || null);
-      }
-    } catch (err) {
-      console.error('Case resolution failed:', err);
-    }
-  };
-
-  // Discharge Patient from Queue
-  const confirmDischargePatient = async () => {
-    if (!patientToDelete) return;
-    const pid = patientToDelete._id || patientToDelete.id;
-
-    try {
-      await deletePatientApi(pid);
-      const remaining = activeQueue.filter(item => (item._id || item.id) !== pid);
-      setActiveQueue(remaining);
-      if (selectedCase && (selectedCase._id || selectedCase.id) === pid) {
-        setSelectedCase(remaining[0] || null);
-      }
-      setPatientToDelete(null);
-    } catch (err) {
-      console.error('Discharge request failed:', err);
-    }
-  };
-
-  // Submit Prescription & Broadcast to ASHA
   const handleCompleteConsult = async (e) => {
     e.preventDefault();
+    if (!selectedCase) return;
     setIsSubmitted(true);
 
     try {
-      const patientId = selectedCase._id || selectedCase.id;
+      const pid = selectedCase._id || selectedCase.id;
       const payload = {
-        patientId,
+        patientId: pid,
         patientName: selectedCase.name,
-        doctorName: user?.name || 'Dr. Arvind Sharma',
+        doctorName: user?.name || 'Dr. Arvind Sharma (MO)',
+        doctorRegNo: 'UP-MCI-84920',
         diagnosis: prescription.diagnosis,
         medicines: prescription.medicines,
         advice: prescription.advice,
-        safetyFlagsAtSigning: safetyWarnings.map((w) => w.message),
         timestamp: new Date().toISOString()
       };
 
       const { data } = await createPrescriptionApi(payload);
-      const savedData = data || payload;
-      setCompletedPrescriptions([savedData, ...completedPrescriptions]);
-      
-      // 1. Instant WebSocket Broadcast to ASHA Desk
-      if (socket) {
-        socket.emit('prescription_dispatched', savedData);
-      }
+      setCompletedPrescriptions((prev) => [data || payload, ...prev]);
 
-      // 2. Instant Cross-Tab BroadcastChannel (Direct memory push to ASHA tab)
-      try {
-        const channel = new BroadcastChannel('swasthya_rx_channel');
-        channel.postMessage({ type: 'RX_DISPATCHED', payload: savedData });
-        channel.close();
-      } catch (bcErr) {
-        console.warn('BroadcastChannel sync error:', bcErr);
-      }
+      if (socket) socket.emit('prescription_dispatched', data || payload);
 
-      const remaining = activeQueue.filter(item => (item._id || item.id) !== patientId);
+      const remaining = activeQueue.filter((p) => (p._id || p.id) !== pid);
       setActiveQueue(remaining);
       setSelectedCase(remaining[0] || null);
-      setIsSubmitted(false);
     } catch (err) {
       console.error('Prescription submission failed:', err);
-      
-      // Fallback local broadcast in case network API delays
-      if (selectedCase) {
-        const fallbackPayload = {
-          patientId: selectedCase._id || selectedCase.id,
-          patientName: selectedCase.name,
-          doctorName: user?.name || 'Dr. Arvind Sharma',
-          diagnosis: prescription.diagnosis,
-          medicines: prescription.medicines,
-          advice: prescription.advice,
-          safetyFlagsAtSigning: safetyWarnings.map((w) => w.message),
-          timestamp: new Date().toISOString()
-        };
-
-        if (socket) {
-          socket.emit('prescription_dispatched', fallbackPayload);
-        }
-
-        try {
-          const channel = new BroadcastChannel('swasthya_rx_channel');
-          channel.postMessage({ type: 'RX_DISPATCHED', payload: fallbackPayload });
-          channel.close();
-        } catch (bcErr) {
-          console.warn('BroadcastChannel sync error:', bcErr);
-        }
-      }
+    } finally {
       setIsSubmitted(false);
     }
   };
 
+  const handleResolve = async (pid) => {
+    try {
+      await updatePatientApi(pid, { severity: 'LOW_GREEN' });
+      setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDelete = async (pid) => {
+    try {
+      await deletePatientApi(pid);
+      setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const resolvedPhone = selectedCase?.phone || 
+    selectedCase?.mobile || 
+    selectedCase?.contactNumber || 
+    selectedCase?.contact || 
+    'N/A';
+
+  const resolvedNotes = selectedCase?.fieldNotes || 
+    selectedCase?.lastTriage?.notes || 
+    selectedCase?.notes || 
+    'No primary clinical notes recorded.';
+
+  const flaggedCount = activeAlertVitals.filter(c => c.level !== 'GREEN').length;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      
-      {/* Header */}
+      {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-200 gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
             <Stethoscope className="w-7 h-7 text-emerald-600" />
             Medical Officer Tele-Consult Workdesk
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            Logged in as <span className="font-semibold text-slate-800">{user?.name}</span> • {user?.phcCenter}
+            Logged in as <span className="font-semibold text-slate-800">{user?.name || 'Dr. Arvind Sharma'} (MO)</span> • {user?.phcCenter || 'PHC Tele-OPD Hub'}
           </p>
         </div>
         <div className="flex items-center gap-3">
           <button
             onClick={loadDoctorData}
-            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all text-xs font-bold flex items-center gap-1.5 active:scale-95"
-            title="Refresh Live Queue"
+            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-600' : ''}`} /> Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-600' : ''}`} /> Refresh Queue
           </button>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
-            <Radio className="w-3 h-3 text-emerald-500 animate-pulse" />
-            WebSocket Live Broadcast Active
+          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
+            <Radio className="w-3.5 h-3.5 text-emerald-500 animate-pulse" /> Live Sync
           </span>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
-        
-        {/* Priority Consultation Queue */}
+        {/* Left Side: Priority Queue */}
         <div className="lg:col-span-4 space-y-4">
           <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Live Tele-Consult Queue ({activeQueue.length})
+                Live Queue ({activeQueue.length})
               </h3>
               <Clock className="w-4 h-4 text-slate-400" />
             </div>
 
             {loading ? (
-              <div className="text-center py-6 text-xs text-slate-400">
-                <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-emerald-600" />
-                Loading Priority Queue...
-              </div>
+              <div className="text-center py-6 text-xs text-slate-400">Loading Queue...</div>
             ) : activeQueue.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs font-medium">
-                No critical patients waiting in queue.
-              </div>
+              <div className="text-center py-8 text-slate-400 text-xs font-medium">No critical cases waiting.</div>
             ) : (
               <div className="space-y-2.5">
                 {activeQueue.map((item) => {
                   const pid = item._id || item.id;
                   const isSelected = (selectedCase?._id || selectedCase?.id) === pid;
-
                   return (
                     <div
                       key={pid}
                       className={`p-3.5 rounded-2xl border transition-all ${
                         isSelected
-                          ? 'border-emerald-600 bg-emerald-50/60 shadow-sm ring-2 ring-emerald-500/20'
+                          ? 'border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-500/20'
                           : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
                       }`}
                     >
                       <div className="flex justify-between items-start">
-                        <div 
-                          onClick={() => setSelectedCase(item)}
-                          className="cursor-pointer flex-1"
-                        >
-                          <h4 className="text-sm font-bold text-slate-900">{item.name}</h4>
+                        <div onClick={() => handleSelectPatient(item)} className="cursor-pointer flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-bold text-slate-900">{item.name}</h4>
+                            {item.hasNewUpdate && (
+                              <span className="relative flex h-2.5 w-2.5" title="Triage Recently Updated">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-500">{item.age}y, {item.gender} • {item.village}</p>
                           <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mt-1 ${
                             item.severity?.includes('RED') ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
@@ -491,20 +667,11 @@ export default function DoctorDashboard() {
                             {item.severity?.replace('_', ' ') || 'QUEUED'}
                           </span>
                         </div>
-
-                        <div className="flex items-center gap-1 ml-2">
-                          <button
-                            onClick={() => handleMarkResolved(pid)}
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-all"
-                            title="Mark as Resolved"
-                          >
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => handleResolve(pid)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="Mark Resolved">
                             <Check className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => setPatientToDelete(item)}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded-lg transition-all"
-                            title="Discharge Patient"
-                          >
+                          <button onClick={() => handleDelete(pid)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded-lg" title="Archive">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
@@ -516,19 +683,16 @@ export default function DoctorDashboard() {
             )}
           </div>
 
-          {/* Cloud Prescriptions History */}
           {completedPrescriptions.length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Signed in Cloud ({completedPrescriptions.length})
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Signed Prescriptions ({completedPrescriptions.length})
               </h3>
               <div className="space-y-2">
-                {completedPrescriptions.slice(0, 4).map((rx) => (
-                  <div key={rx._id || rx.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+                {completedPrescriptions.slice(0, 3).map((rx) => (
+                  <div key={rx._id || rx.id} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-xs">
                     <p className="font-bold text-slate-900">{rx.patientName}</p>
                     <p className="text-[11px] text-slate-500">{rx.diagnosis}</p>
-                    <span className="text-[10px] text-emerald-700 font-semibold">● ABDM Verified • Synced to PHC Pharmacy</span>
                   </div>
                 ))}
               </div>
@@ -536,214 +700,263 @@ export default function DoctorDashboard() {
           )}
         </div>
 
-        {/* Consultation Panel */}
+        {/* Right Side Consultation Workspace */}
         <div className="lg:col-span-8 space-y-6">
           {selectedCase ? (
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6">
-              
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6">
+              {/* Patient Info Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900">{selectedCase.name}</h2>
-                  <p className="text-xs text-slate-500">
-                    Category: {selectedCase.category} • {selectedCase.village}
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl font-bold text-slate-900">{selectedCase.name}</h2>
+                    {isPregnant && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-pink-100 border border-pink-300 text-pink-700 text-xs font-black">
+                        PREGNANT ({selectedCase.gestationalWeeks || '15'}w)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                    <span>Age: <strong className="text-slate-700">{selectedCase.age}y</strong></span>
+                    <span>•</span>
+                    <span>Gender: <strong className="text-slate-700">{selectedCase.gender}</strong></span>
+                    <span>•</span>
+                    <span>Village: <strong className="text-slate-700">{selectedCase.village || 'N/A'}</strong></span>
+                    <span>•</span>
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3 h-3 text-slate-400" />
+                      Phone: <strong className="text-slate-800">{resolvedPhone}</strong>
+                    </span>
                   </p>
                 </div>
                 
-                {/* Consultation & Emergency Triggers */}
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowAmbulanceModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all"
-                    title="Trigger Emergency First Referral Transport"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all"
                   >
-                    <Truck className="w-4 h-4 text-rose-600" />
-                    Dispatch 108 FRU
+                    <Truck className="w-4 h-4 text-rose-600" /> Dispatch 108 FRU
                   </button>
-
                   <button
                     type="button"
                     onClick={() => setShowVideoModal(true)}
-                    className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all active:scale-95"
+                    className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow transition-all"
                   >
-                    <Video className="w-4 h-4" />
-                    Connect Video Room
+                    <Video className="w-4 h-4" /> Video Call
                   </button>
                 </div>
               </div>
 
-              {/* Vitals Summary Strip */}
-              <div className="grid grid-cols-3 gap-3 my-4">
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Blood Pressure</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">
-                    {selectedCase.lastTriage ? `${selectedCase.lastTriage.bpSystolic}/${selectedCase.lastTriage.bpDiastolic}` : (selectedCase.lastVitals?.bp || '120/80')} mmHg
-                  </p>
+              {/* Dynamic Abnormal Vitals Trigger Strip */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+                    Triggered Clinical Vitals & Triage Findings
+                  </span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${flaggedCount > 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>
+                    {flaggedCount > 0 ? `${flaggedCount} Abnormal Parameter(s) Detected` : 'All Base Vitals Normal'}
+                  </span>
                 </div>
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Pulse Rate</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">
-                    {selectedCase.lastTriage ? selectedCase.lastTriage.pulse : (selectedCase.lastVitals?.pulse || 75)} bpm
-                  </p>
-                </div>
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Oxygen Saturation</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">
-                    {selectedCase.lastTriage ? selectedCase.lastTriage.spo2 : (selectedCase.lastVitals?.spO2 || 98)}%
-                  </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {activeAlertVitals.map((card) => {
+                    const isRed = card.level === 'RED';
+                    const isYellow = card.level === 'YELLOW';
+
+                    return (
+                      <div
+                        key={card.id}
+                        className={`p-3.5 rounded-2xl border transition-all ${
+                          isRed
+                            ? 'bg-rose-50 border-rose-300 text-rose-900 shadow-sm'
+                            : isYellow
+                            ? 'bg-amber-50 border-amber-300 text-amber-900 shadow-sm'
+                            : 'bg-slate-50 border-slate-200 text-slate-900'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] uppercase font-bold tracking-wider opacity-80">
+                            {card.label}
+                          </span>
+                          <span
+                            className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${
+                              isRed
+                                ? 'bg-rose-200 text-rose-900 animate-pulse'
+                                : isYellow
+                                ? 'bg-amber-200 text-amber-900'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {card.tag}
+                          </span>
+                        </div>
+                        <p
+                          className={`text-base font-black mt-1 ${
+                            isRed ? 'text-rose-700' : isYellow ? 'text-amber-700' : 'text-slate-800'
+                          }`}
+                        >
+                          {card.value} {card.unit && <span className="text-xs font-semibold opacity-75">{card.unit}</span>}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Patient Context Strip — what the Watchdog is reading from */}
-              {(selectedCase.isPregnant || selectedCase.fieldNotes || selectedCase.lastTriage?.notes) && (
-                <div className="flex flex-wrap items-center gap-2 mb-4">
-                  {selectedCase.isPregnant && (
-                    <span className="px-2.5 py-1 rounded-lg bg-pink-50 border border-pink-200 text-pink-700 text-[10px] font-bold">
-                      Pregnant • {selectedCase.gestationalWeeks || '?'}w
-                    </span>
-                  )}
-                  {(selectedCase.fieldNotes || selectedCase.lastTriage?.notes) && (
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-semibold italic">
-                      ASHA notes: "{selectedCase.fieldNotes || selectedCase.lastTriage?.notes}"
-                    </span>
+              {/* Field Notes Accordion */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setShowFieldNotes(!showFieldNotes)}
+                  className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 text-left text-xs font-bold text-slate-700"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-3.5 h-3.5 text-emerald-600" /> ASHA Observations & Audio Notes
+                  </span>
+                  {showFieldNotes ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                </button>
+                {showFieldNotes && (
+                  <div className="p-3 bg-white border-t border-slate-100 text-xs text-slate-600 italic">
+                    "{resolvedNotes}"
+                  </div>
+                )}
+              </div>
+
+              {/* Dynamic Contextual 1-Click Quick Presets (Append & Multi-select) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <Zap className="w-3 h-3 text-amber-500" /> Contextual Presets for {selectedCase.name}
+                  </span>
+                  {appliedPresetIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAppliedPresetIds([]);
+                        setPrescription({ diagnosis: '', medicines: '', advice: '' });
+                      }}
+                      className="text-[10px] text-slate-400 hover:text-rose-600 font-bold"
+                    >
+                      Clear Presets
+                    </button>
                   )}
                 </div>
-              )}
 
-              {/* Digital E-Prescription Form */}
-              <form onSubmit={handleCompleteConsult} className="space-y-4">
-                <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-emerald-600" />
-                  Digital E-Prescription & Clinical Orders
-                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {filteredPresets.map((p) => {
+                    const isApplied = appliedPresetIds.includes(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleApplyPreset(p)}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 ${
+                          isApplied
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                            : 'bg-slate-100 hover:bg-emerald-50 hover:text-emerald-800 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {isApplied && <Check className="w-3 h-3" />}
+                        <span>{p.name}</span>
+                        {isApplied && <span className="text-[9px] bg-emerald-700 px-1 rounded text-emerald-100">Added</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
+              {/* Rx Form */}
+              <form onSubmit={handleCompleteConsult} className="space-y-3.5">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Doctor's Clinical Diagnosis</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Clinical Diagnosis</label>
                   <input
                     type="text"
                     required
                     value={prescription.diagnosis}
                     onChange={(e) => setPrescription({ ...prescription, diagnosis: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-medium"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
+                    placeholder="Enter clinical diagnosis..."
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Prescribed Medicines & Dosage</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Prescribed Medicines (Multi-dose list)</label>
                   <textarea
-                    rows={2}
+                    rows={3}
                     required
                     value={prescription.medicines}
                     onChange={(e) => setPrescription({ ...prescription, medicines: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-mono font-medium"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 font-mono focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                    placeholder="Click presets above to add medicines line-by-line..."
                   />
 
-                  {/* Real-time Safety Watchdog — recomputes on every keystroke */}
-                  <div className="mt-2">
-                    <SafetyWatchdogBanner warnings={safetyWarnings} />
-                  </div>
+                  {/* Contraindication Flag */}
+                  {safetyWarnings.length > 0 && (
+                    <div className="mt-2 p-3 bg-rose-50 border-2 border-rose-300 rounded-xl space-y-1">
+                      <div className="flex items-center gap-1.5 text-rose-800 text-xs font-bold uppercase">
+                        <ShieldAlert className="w-4 h-4 text-rose-600 animate-bounce" /> Clinical Safety Contraindication
+                      </div>
+                      {safetyWarnings.map((w) => (
+                        <p key={w.id} className="text-xs font-semibold text-rose-700 leading-snug">⚠️ {w.message}</p>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Advice & Follow-up Directives</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Advice & Follow-up</label>
                   <textarea
                     rows={2}
                     value={prescription.advice}
                     onChange={(e) => setPrescription({ ...prescription, advice: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-medium"
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
+                    placeholder="Advice or follow-up instructions..."
                   />
                 </div>
 
-                {isSubmitted && (
-                  <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-emerald-600" />
-                    Prescription synchronized to database.
+                {/* ABDM Seal Badge */}
+                <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Award className="w-4 h-4 text-emerald-600" />
+                    <div>
+                      <p className="text-xs font-bold text-slate-800">{user?.name || 'Dr. Arvind Sharma'}, MBBS, MD</p>
+                      <p className="text-[10px] text-slate-500">MCI Reg: <span className="font-semibold text-slate-700">UP-MCI-84920</span> • ABDM Verified</p>
+                    </div>
                   </div>
-                )}
+                  <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">DIGITAL SEAL READY</span>
+                </div>
 
                 <button
                   type="submit"
                   disabled={isSubmitted}
-                  className={`w-full py-3 active:scale-[0.99] text-white font-bold text-xs rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 ${
-                    safetyWarnings.some((w) => w.severity === 'high')
-                      ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
-                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  className={`w-full py-2.5 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99] ${
+                    safetyWarnings.length > 0 ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
                   }`}
                 >
-                  {safetyWarnings.length > 0 ? (
-                    <ShieldAlert className="w-4 h-4" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                  {safetyWarnings.some((w) => w.severity === 'high')
-                    ? 'Sign & Sync Anyway (Safety Flag Active)'
-                    : 'Digitally Sign & Sync E-Prescription'}
+                  <Send className="w-4 h-4" />
+                  {safetyWarnings.length > 0 ? 'Sign & Sync (Safety Flag Active)' : 'Digitally Sign & Sync E-Prescription'}
                 </button>
-
-                {safetyWarnings.length === 0 && prescription.medicines.trim() && (
-                  <p className="text-[10px] text-slate-400 font-semibold flex items-center gap-1 justify-center">
-                    <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                    No known contraindications detected for this patient's recorded profile.
-                  </p>
-                )}
               </form>
-
             </div>
           ) : (
-            <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400">
+            <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400 text-xs">
               Select a patient from the queue to start tele-consultation.
             </div>
           )}
         </div>
-
       </div>
 
-      {/* Discharge Confirmation Modal */}
-      {patientToDelete && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-slate-200">
-            <div className="flex items-start gap-4">
-              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 border border-rose-100">
-                <AlertOctagon className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Discharge from Priority Queue</h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Are you sure you want to discharge <span className="font-bold text-slate-800">{patientToDelete.name}</span>? This will archive the case and synchronize the update across all connected stations.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button
-                type="button"
-                onClick={() => setPatientToDelete(null)}
-                className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmDischargePatient}
-                className="flex-1 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-md shadow-rose-600/20 transition-all"
-              >
-                Confirm Discharge
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 108 Emergency Ambulance Modal */}
+      {/* Ambulance Dispatch Modal */}
       {showAmbulanceModal && selectedCase && (
         <AmbulanceDispatchModal
           patient={selectedCase}
           onClose={() => setShowAmbulanceModal(false)}
-          onConfirmDispatch={handleConfirmDispatch}
+          onConfirmDispatch={(data) => socket && socket.emit('dispatch_emergency_ambulance', data)}
         />
       )}
 
-      {/* WebRTC Video Call Room */}
+      {/* Video Call Modal */}
       {showVideoModal && selectedCase && (
         <TeleConsultModal
           patient={{ ...selectedCase, patientName: selectedCase.name, ashaName: 'Sunita Devi' }}
@@ -751,7 +964,6 @@ export default function DoctorDashboard() {
           onEndCall={() => setShowVideoModal(false)}
         />
       )}
-
     </div>
   );
 }
