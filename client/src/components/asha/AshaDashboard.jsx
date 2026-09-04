@@ -649,52 +649,80 @@ export default function AshaDashboard() {
                   </span>
                 </div>
 
-                {/* Vitals Snapshot Strip */}
-                <div className="pt-2 border-t border-slate-200/70">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider">
-                      {lang === 'hi' ? 'अंतिम महत्वपूर्ण संकेत (Vitals)' : 'Latest Clinical Vitals'}
-                    </span>
-                    {triage?.timestamp && (
-                      <span className="text-[9px] text-slate-400 font-semibold">
-                        {new Date(triage.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {/* ========================================================================= */}
+                {/* UPDATE START: Vitals Snapshot Strip (Sirf tab dikhega jab Triage Save hoga) */}
+                {/* ========================================================================= */}
+                {triage && (triage.spo2 || triage.bpSystolic || triage.pulse || triage.temp || (triage.customVitals && triage.customVitals.length > 0)) ? (
+                  <div className="pt-2 border-t border-slate-200/70">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">
+                        {lang === 'hi' ? 'अंतिम क्लिनिकल वाइटल्स (Vitals)' : 'Latest Clinical Vitals'}
                       </span>
-                    )}
-                  </div>
+                      {triage.timestamp && (
+                        <span className="text-[9px] text-slate-400 font-semibold">
+                          {new Date(triage.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
 
-                  {triage ? (
-                    <div className="grid grid-cols-4 gap-1 text-center font-mono">
-                      <div className="p-1 rounded-lg bg-white border border-slate-200/70 shadow-2xs">
-                        <span className="block text-[8px] font-bold text-slate-400 uppercase">SpO2</span>
-                        <span className={`text-[11px] font-black ${Number(triage.spo2) < 94 ? 'text-rose-600 font-bold' : 'text-slate-800'}`}>
-                          {triage.spo2 ? `${triage.spo2}%` : '--'}
-                        </span>
-                      </div>
-                      <div className="p-1 rounded-lg bg-white border border-slate-200/70 shadow-2xs">
-                        <span className="block text-[8px] font-bold text-slate-400 uppercase">BP</span>
-                        <span className="text-[11px] font-black text-slate-800">
-                          {triage.bpSystolic && triage.bpDiastolic ? `${triage.bpSystolic}/${triage.bpDiastolic}` : (triage.bp || '--')}
-                        </span>
-                      </div>
-                      <div className="p-1 rounded-lg bg-white border border-slate-200/70 shadow-2xs">
-                        <span className="block text-[8px] font-bold text-slate-400 uppercase">Pulse</span>
-                        <span className="text-[11px] font-black text-slate-800">
-                          {triage.pulse ? `${triage.pulse}` : '--'}
-                        </span>
-                      </div>
-                      <div className="p-1 rounded-lg bg-white border border-slate-200/70 shadow-2xs">
-                        <span className="block text-[8px] font-bold text-slate-400 uppercase">Temp</span>
-                        <span className={`text-[11px] font-black ${Number(triage.temp) > 99.5 ? 'text-rose-600' : 'text-slate-800'}`}>
-                          {triage.temp ? `${triage.temp}°` : '--'}
-                        </span>
-                      </div>
+                    <div className="grid grid-cols-4 gap-1.5 text-center font-mono">
+                      {/* 1. SpO2 */}
+                      {triage.spo2 ? (
+                        <div className="p-1 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                          <span className="block text-[8px] font-bold text-slate-400 uppercase">SpO2</span>
+                          <span className={`text-[11px] font-black ${Number(triage.spo2) < 94 ? 'text-rose-600' : 'text-slate-800'}`}>
+                            {triage.spo2}%
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {/* 2. BP */}
+                      {(triage.bpSystolic && triage.bpDiastolic) ? (
+                        <div className="p-1 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                          <span className="block text-[8px] font-bold text-slate-400 uppercase">BP</span>
+                          <span className={`text-[11px] font-black ${Number(triage.bpSystolic) >= 140 ? 'text-rose-600' : 'text-slate-800'}`}>
+                            {triage.bpSystolic}/{triage.bpDiastolic}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {/* 3. Pulse */}
+                      {triage.pulse ? (
+                        <div className="p-1 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                          <span className="block text-[8px] font-bold text-slate-400 uppercase">Pulse</span>
+                          <span className={`text-[11px] font-black ${(Number(triage.pulse) > 100 || Number(triage.pulse) < 55) ? 'text-amber-600' : 'text-slate-800'}`}>
+                            {triage.pulse}
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {/* 4. Temperature */}
+                      {triage.temp ? (
+                        <div className="p-1 rounded-lg bg-white border border-slate-200 shadow-2xs">
+                          <span className="block text-[8px] font-bold text-slate-400 uppercase">Temp</span>
+                          <span className={`text-[11px] font-black ${Number(triage.temp) >= 100.4 ? 'text-rose-600' : 'text-slate-800'}`}>
+                            {triage.temp}°
+                          </span>
+                        </div>
+                      ) : null}
+
+                      {/* 5. Dynamic Custom Added Vitals (Sugar, Hb etc.) */}
+                      {triage.customVitals && triage.customVitals.map((cv) => (
+                        <div key={cv.id || cv.title} className="p-1 rounded-lg bg-teal-50 border border-teal-200 shadow-2xs">
+                          <span className="block text-[8px] font-bold text-teal-800 uppercase truncate" title={cv.title}>
+                            {cv.title}
+                          </span>
+                          <span className="text-[11px] font-black text-teal-950">
+                            {cv.value}
+                          </span>
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="py-1 px-2 rounded-lg bg-slate-100/80 text-[10px] text-slate-400 italic text-center">
-                      {lang === 'hi' ? 'वाइटल्स दर्ज नहीं हैं' : 'No vitals recorded yet'}
-                    </div>
-                  )}
-                </div>
+                  </div>
+                ) : null}
+                {/* ========================================================================= */}
+                {/* UPDATE END                                                                */}
+                {/* ========================================================================= */}
 
                 {patient.fieldNotes && (
                   <div className="pt-1.5 text-[11px] text-slate-500 italic border-t border-slate-200/60 line-clamp-1">

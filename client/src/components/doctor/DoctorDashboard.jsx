@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import TeleConsultModal from './TeleConsultModal';
@@ -23,8 +23,142 @@ import {
   Check, 
   AlertOctagon, 
   Radio,
-  Truck
+  Truck,
+  ShieldAlert,
+  ShieldCheck
 } from 'lucide-react';
+
+/* =========================================================================
+   CLINICAL SAFETY WATCHDOG — rule-based drug/condition interaction engine
+   ========================================================================= */
+
+const SAFETY_RULES = [
+  {
+    id: 'ace-pregnancy',
+    severity: 'high',
+    match: (text) => /\b(enalapril|lisinopril|ramipril|captopril|ace[- ]?inhibitor)\b/i.test(text),
+    applies: (patient) => !!patient?.isPregnant,
+    message: (patient) =>
+      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). ACE inhibitors are contraindicated in pregnancy — avoid.`
+  },
+  {
+    id: 'arb-pregnancy',
+    severity: 'high',
+    match: (text) => /\b(losartan|telmisartan|valsartan|olmesartan|\bARB\b)\b/i.test(text),
+    applies: (patient) => !!patient?.isPregnant,
+    message: (patient) =>
+      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). ARBs are contraindicated in pregnancy — avoid.`
+  },
+  {
+    id: 'warfarin-pregnancy',
+    severity: 'high',
+    match: (text) => /\bwarfarin\b/i.test(text),
+    applies: (patient) => !!patient?.isPregnant,
+    message: () =>
+      `Patient is pregnant. Warfarin is teratogenic — avoid; consider heparin instead.`
+  },
+  {
+    id: 'nsaid-pregnancy-3rd',
+    severity: 'high',
+    match: (text) => /\b(ibuprofen|diclofenac|naproxen|mefenamic|nsaid)\b/i.test(text),
+    applies: (patient) => !!patient?.isPregnant && Number(patient?.gestationalWeeks) >= 28,
+    message: (patient) =>
+      `Patient is in the third trimester (${patient?.gestationalWeeks}w). NSAIDs risk premature closure of the ductus arteriosus — avoid after 28 weeks.`
+  },
+  {
+    id: 'betablocker-asthma',
+    severity: 'high',
+    match: (text) => /\b(propranolol|atenolol|metoprolol|bisoprolol|beta[- ]?blocker)\b/i.test(text),
+    applies: (patient) => /asthma/i.test(patient?.fieldNotes || ''),
+    message: () =>
+      `Field notes mention asthma history. Non-selective beta-blockers may trigger bronchospasm — verify before prescribing.`
+  },
+  {
+    id: 'nsaid-asthma',
+    severity: 'medium',
+    match: (text) => /\b(ibuprofen|diclofenac|naproxen|aspirin|nsaid)\b/i.test(text),
+    applies: (patient) => /asthma/i.test(patient?.fieldNotes || ''),
+    message: () =>
+      `Field notes mention asthma history. NSAIDs/aspirin can precipitate bronchospasm in a subset of asthma patients — confirm tolerance.`
+  },
+  {
+    id: 'metformin-renal',
+    severity: 'medium',
+    match: (text) => /\bmetformin\b/i.test(text),
+    applies: (patient) => /renal|kidney/i.test(patient?.fieldNotes || ''),
+    message: () =>
+      `Field notes mention renal/kidney concerns. Metformin carries a lactic-acidosis risk with impaired renal function — verify before prescribing.`
+  },
+  {
+    id: 'aspirin-pregnancy-note',
+    severity: 'low',
+    match: (text) => /\baspirin\b/i.test(text),
+    applies: (patient) => !!patient?.isPregnant,
+    message: (patient) =>
+      `Patient is pregnant (${patient?.gestationalWeeks || '?'}w). Low-dose aspirin is often used for pre-eclampsia prophylaxis — confirm dose and indication.`
+  }
+];
+
+function computeSafetyWarnings(patient, medicinesText) {
+  if (!patient || !medicinesText || !medicinesText.trim()) return [];
+  return SAFETY_RULES
+    .filter((rule) => rule.match(medicinesText) && rule.applies(patient))
+    .map((rule) => ({ id: rule.id, severity: rule.severity, message: rule.message(patient) }));
+}
+
+const SEVERITY_STYLES = {
+  high: {
+    wrap: 'bg-rose-50 border-rose-300',
+    icon: 'text-rose-600',
+    title: 'text-rose-800',
+    text: 'text-rose-700'
+  },
+  medium: {
+    wrap: 'bg-amber-50 border-amber-300',
+    icon: 'text-amber-600',
+    title: 'text-amber-800',
+    text: 'text-amber-700'
+  },
+  low: {
+    wrap: 'bg-slate-50 border-slate-300',
+    icon: 'text-slate-500',
+    title: 'text-slate-700',
+    text: 'text-slate-600'
+  }
+};
+
+function SafetyWatchdogBanner({ warnings }) {
+  if (!warnings || warnings.length === 0) return null;
+
+  const highest = warnings.some((w) => w.severity === 'high')
+    ? 'high'
+    : warnings.some((w) => w.severity === 'medium')
+    ? 'medium'
+    : 'low';
+  const style = SEVERITY_STYLES[highest];
+
+  return (
+    <div className={`p-3.5 rounded-2xl border-2 ${style.wrap} space-y-2 animate-in fade-in`}>
+      <div className="flex items-center gap-1.5">
+        <ShieldAlert className={`w-4 h-4 ${style.icon}`} />
+        <span className={`text-[11px] font-black uppercase tracking-wider ${style.title}`}>
+          Clinical Safety Watchdog
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {warnings.map((w) => (
+          <li key={w.id} className={`text-xs font-semibold leading-relaxed flex gap-1.5 ${style.text}`}>
+            <span>•</span>
+            <span>{w.message}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] text-slate-400 font-medium pt-1 border-t border-black/5">
+        Advisory only — final diagnosis and medication choice remain with the treating doctor.
+      </p>
+    </div>
+  );
+}
 
 export default function DoctorDashboard() {
   const { user } = useAuth();
@@ -44,21 +178,50 @@ export default function DoctorDashboard() {
   });
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // Initial Data Load
+  // Live, non-blocking safety flags recomputed as the doctor types / switches case
+  const safetyWarnings = useMemo(
+    () => computeSafetyWarnings(selectedCase, prescription.medicines),
+    [selectedCase, prescription.medicines]
+  );
+
+  // Initial Data Load (Unified Backend Sync + Inclusive Triage Filtering)
   const loadDoctorData = async () => {
+    setLoading(true);
     try {
       const [{ data: patients }, { data: rxList }] = await Promise.all([
         fetchPatientsApi(),
         fetchPrescriptionsApi()
       ]);
 
-      const waiting = (patients || []).filter(
-        p => p.severity === 'CRITICAL_RED' || p.severity === 'MODERATE_YELLOW'
-      );
+      const allPatients = patients || [];
+
+      // Filter: Inclusive check taaki koi bhi pending/triaged patient drop na ho
+      const waiting = allPatients.filter((p) => {
+        const severityStr = String(p.severity || '').toUpperCase();
+        const isUrgent = 
+          severityStr.includes('RED') || 
+          severityStr.includes('YELLOW') || 
+          severityStr.includes('CRITICAL') || 
+          severityStr.includes('MODERATE');
+
+        const isQueued = 
+          p.status === 'QUEUED_FOR_TELEOPD' || 
+          p.teleConsultRequested === true;
+
+        const hasTriage = Boolean(p.lastTriage);
+
+        return isUrgent || isQueued || hasTriage;
+      });
       
       setActiveQueue(waiting);
-      if (waiting.length > 0) setSelectedCase(waiting[0]);
-      else setSelectedCase(null);
+      setSelectedCase((prev) => {
+        if (!prev && waiting.length > 0) return waiting[0];
+        if (prev) {
+          const updated = waiting.find(p => (p._id || p.id) === (prev._id || prev.id));
+          return updated || waiting[0] || null;
+        }
+        return null;
+      });
 
       setCompletedPrescriptions(rxList || []);
     } catch (err) {
@@ -78,8 +241,17 @@ export default function DoctorDashboard() {
 
     socket.on('patient_queue_updated', (patient) => {
       const pid = patient._id || patient.id;
+      const severityStr = String(patient.severity || '').toUpperCase();
+      const isUrgent = 
+        severityStr.includes('RED') || 
+        severityStr.includes('YELLOW') || 
+        severityStr.includes('CRITICAL') || 
+        severityStr.includes('MODERATE') || 
+        patient.status === 'QUEUED_FOR_TELEOPD' || 
+        patient.teleConsultRequested === true || 
+        Boolean(patient.lastTriage);
 
-      if (patient.severity === 'CRITICAL_RED' || patient.severity === 'MODERATE_YELLOW') {
+      if (isUrgent) {
         setActiveQueue((prev) => {
           const index = prev.findIndex(p => (p._id || p.id) === pid);
           if (index !== -1) {
@@ -90,7 +262,11 @@ export default function DoctorDashboard() {
           return [patient, ...prev];
         });
 
-        setSelectedCase((prev) => prev || patient);
+        setSelectedCase((prev) => {
+          if (!prev) return patient;
+          const prevId = prev._id || prev.id;
+          return prevId === pid ? patient : prev;
+        });
       } else {
         setActiveQueue((prev) => prev.filter(p => (p._id || p.id) !== pid));
         setSelectedCase((prev) => ((prev?._id || prev?.id) === pid ? null : prev));
@@ -107,6 +283,24 @@ export default function DoctorDashboard() {
       socket.off('patient_deleted');
     };
   }, [socket]);
+
+  // Cross-Tab Broadcast Channel (Sync between ASHA tab and Doctor tab directly)
+  useEffect(() => {
+    let channel;
+    try {
+      channel = new BroadcastChannel('swasthya_teleopd_channel');
+      channel.onmessage = (event) => {
+        if (event.data && event.data.type === 'REFRESH_QUEUE') {
+          loadDoctorData();
+        }
+      };
+    } catch (e) {
+      console.warn('BroadcastChannel not supported:', e);
+    }
+    return () => {
+      if (channel) channel.close();
+    };
+  }, []);
 
   // Handle 108 FRU Dispatch via WebSockets
   const handleConfirmDispatch = (dispatchData) => {
@@ -161,6 +355,7 @@ export default function DoctorDashboard() {
         diagnosis: prescription.diagnosis,
         medicines: prescription.medicines,
         advice: prescription.advice,
+        safetyFlagsAtSigning: safetyWarnings.map((w) => w.message),
         timestamp: new Date().toISOString()
       };
 
@@ -198,6 +393,7 @@ export default function DoctorDashboard() {
           diagnosis: prescription.diagnosis,
           medicines: prescription.medicines,
           advice: prescription.advice,
+          safetyFlagsAtSigning: safetyWarnings.map((w) => w.message),
           timestamp: new Date().toISOString()
         };
 
@@ -234,10 +430,10 @@ export default function DoctorDashboard() {
         <div className="flex items-center gap-3">
           <button
             onClick={loadDoctorData}
-            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all text-xs font-bold flex items-center gap-1.5"
+            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-all text-xs font-bold flex items-center gap-1.5 active:scale-95"
             title="Refresh Live Queue"
           >
-            <RefreshCw className="w-3.5 h-3.5" /> Refresh
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-600' : ''}`} /> Refresh
           </button>
           <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
             <Radio className="w-3 h-3 text-emerald-500 animate-pulse" />
@@ -290,9 +486,9 @@ export default function DoctorDashboard() {
                           <h4 className="text-sm font-bold text-slate-900">{item.name}</h4>
                           <p className="text-xs text-slate-500">{item.age}y, {item.gender} • {item.village}</p>
                           <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mt-1 ${
-                            item.severity === 'CRITICAL_RED' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                            item.severity?.includes('RED') ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
                           }`}>
-                            {item.severity?.replace('_', ' ')}
+                            {item.severity?.replace('_', ' ') || 'QUEUED'}
                           </span>
                         </div>
 
@@ -380,17 +576,39 @@ export default function DoctorDashboard() {
               <div className="grid grid-cols-3 gap-3 my-4">
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Blood Pressure</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.lastVitals?.bp || '120/80'} mmHg</p>
+                  <p className="text-sm font-bold text-slate-900 mt-0.5">
+                    {selectedCase.lastTriage ? `${selectedCase.lastTriage.bpSystolic}/${selectedCase.lastTriage.bpDiastolic}` : (selectedCase.lastVitals?.bp || '120/80')} mmHg
+                  </p>
                 </div>
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Pulse Rate</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.lastVitals?.pulse || 75} bpm</p>
+                  <p className="text-sm font-bold text-slate-900 mt-0.5">
+                    {selectedCase.lastTriage ? selectedCase.lastTriage.pulse : (selectedCase.lastVitals?.pulse || 75)} bpm
+                  </p>
                 </div>
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200">
                   <span className="text-[10px] uppercase font-bold text-slate-400">Oxygen Saturation</span>
-                  <p className="text-sm font-bold text-slate-900 mt-0.5">{selectedCase.lastVitals?.spO2 || 98}%</p>
+                  <p className="text-sm font-bold text-slate-900 mt-0.5">
+                    {selectedCase.lastTriage ? selectedCase.lastTriage.spo2 : (selectedCase.lastVitals?.spO2 || 98)}%
+                  </p>
                 </div>
               </div>
+
+              {/* Patient Context Strip — what the Watchdog is reading from */}
+              {(selectedCase.isPregnant || selectedCase.fieldNotes || selectedCase.lastTriage?.notes) && (
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  {selectedCase.isPregnant && (
+                    <span className="px-2.5 py-1 rounded-lg bg-pink-50 border border-pink-200 text-pink-700 text-[10px] font-bold">
+                      Pregnant • {selectedCase.gestationalWeeks || '?'}w
+                    </span>
+                  )}
+                  {(selectedCase.fieldNotes || selectedCase.lastTriage?.notes) && (
+                    <span className="px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-semibold italic">
+                      ASHA notes: "{selectedCase.fieldNotes || selectedCase.lastTriage?.notes}"
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Digital E-Prescription Form */}
               <form onSubmit={handleCompleteConsult} className="space-y-4">
@@ -419,6 +637,11 @@ export default function DoctorDashboard() {
                     onChange={(e) => setPrescription({ ...prescription, medicines: e.target.value })}
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-600 font-mono font-medium"
                   />
+
+                  {/* Real-time Safety Watchdog — recomputes on every keystroke */}
+                  <div className="mt-2">
+                    <SafetyWatchdogBanner warnings={safetyWarnings} />
+                  </div>
                 </div>
 
                 <div>
@@ -441,11 +664,28 @@ export default function DoctorDashboard() {
                 <button
                   type="submit"
                   disabled={isSubmitted}
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-xs rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  className={`w-full py-3 active:scale-[0.99] text-white font-bold text-xs rounded-2xl shadow-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50 ${
+                    safetyWarnings.some((w) => w.severity === 'high')
+                      ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
+                      : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'
+                  }`}
                 >
-                  <Send className="w-4 h-4" />
-                  Digitally Sign & Sync E-Prescription
+                  {safetyWarnings.length > 0 ? (
+                    <ShieldAlert className="w-4 h-4" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                  {safetyWarnings.some((w) => w.severity === 'high')
+                    ? 'Sign & Sync Anyway (Safety Flag Active)'
+                    : 'Digitally Sign & Sync E-Prescription'}
                 </button>
+
+                {safetyWarnings.length === 0 && prescription.medicines.trim() && (
+                  <p className="text-[10px] text-slate-400 font-semibold flex items-center gap-1 justify-center">
+                    <ShieldCheck className="w-3 h-3 text-emerald-500" />
+                    No known contraindications detected for this patient's recorded profile.
+                  </p>
+                )}
               </form>
 
             </div>
