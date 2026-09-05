@@ -1,23 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Activity, 
   AlertTriangle, 
   CheckCircle2, 
   Mic, 
-  MicOff, 
+  Square, 
+  Play, 
+  Pause, 
+  Trash2, 
   X, 
   Plus, 
   Check 
 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
-import { useSpeechRecognition } from '../../utils/useSpeechRecognition';
 import { db } from '../../db/offlineDb';
 
 export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
   const { lang } = useLanguage();
-  const { isListening, transcript, startListening, stopListening } = useSpeechRecognition();
 
-  // Initial State Setup: Check patient existing data, else default values
+  // Core Vitals States
   const [systolic, setSystolic] = useState(patient?.lastTriage?.bpSystolic || '120');
   const [diastolic, setDiastolic] = useState(patient?.lastTriage?.bpDiastolic || '80');
   const [pulse, setPulse] = useState(patient?.lastTriage?.pulse || '72');
@@ -25,21 +26,34 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
   const [temp, setTemp] = useState(patient?.lastTriage?.temp || '98.6');
   const [respRate, setRespRate] = useState(patient?.lastTriage?.respRate || '18');
   
-  // Specific notes: Strictly blank if this patient has no notes recorded
+  // Clinical Text Notes: Strictly patient-specific or blank
   const [clinicalNotes, setClinicalNotes] = useState(
     patient?.lastTriage?.notes || patient?.fieldNotes || ''
   );
 
-  // Dynamic Extra Parameters State: Strictly empty array if not saved for this patient
+  // Triage-Specific Audio Note State (Distinct from registrationAudioNote)
+  const [triageAudio, setTriageAudio] = useState(
+    patient?.lastTriage?.triageAudioNote || patient?.triageAudioNote || null
+  );
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+
+  // Media recording and playback refs
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerIntervalRef = useRef(null);
+  const audioPlayerRef = useRef(null);
+
+  // Custom Extra Parameters State
   const [customVitals, setCustomVitals] = useState(
     patient?.lastTriage?.customVitals || patient?.customVitals || []
   );
-  
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [customTitle, setCustomTitle] = useState('');
   const [customValue, setCustomValue] = useState('');
 
-  // Re-sync states whenever `patient` prop changes
+  // Re-sync states whenever active patient changes
   useEffect(() => {
     if (patient) {
       setSystolic(patient.lastTriage?.bpSystolic || '120');
@@ -48,34 +62,100 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
       setSpo2(patient.lastTriage?.spo2 || '98');
       setTemp(patient.lastTriage?.temp || '98.6');
       setRespRate(patient.lastTriage?.respRate || '18');
-      
-      // Blank if this patient has no previous note
       setClinicalNotes(patient.lastTriage?.notes || patient.fieldNotes || '');
-      
-      // Blank array if this patient has no custom parameters
+      setTriageAudio(patient.lastTriage?.triageAudioNote || patient.triageAudioNote || null);
       setCustomVitals(patient.lastTriage?.customVitals || patient.customVitals || []);
-      
       setIsAddingCustom(false);
       setCustomTitle('');
       setCustomValue('');
     }
   }, [patient?._id, patient?.id]);
 
-  // Sync mic voice transcript into clinicalNotes
+  // Clean up media resources on unmount
   useEffect(() => {
-    if (transcript) {
-      setClinicalNotes((prev) => (prev ? `${prev} ${transcript}` : transcript));
-    }
-  }, [transcript]);
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        mediaRecorderRef.current.stop();
+      }
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+      }
+    };
+  }, []);
 
-  // Evaluate single custom vital severity
+  // --- Real Audio Recording Functions ---
+  const startAudioRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = () => {
+          setTriageAudio(reader.result);
+        };
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error('Microphone access denied:', err);
+      alert('Microphone permission is required to record triage voice notes.');
+    }
+  };
+
+  const stopAudioRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    }
+  };
+
+  const deleteAudioRecording = () => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+    }
+    setIsPlayingAudio(false);
+    setTriageAudio(null);
+    setRecordingSeconds(0);
+  };
+
+  const togglePlayAudio = () => {
+    if (!audioPlayerRef.current) return;
+    if (isPlayingAudio) {
+      audioPlayerRef.current.pause();
+      setIsPlayingAudio(false);
+    } else {
+      audioPlayerRef.current.play();
+      setIsPlayingAudio(true);
+    }
+  };
+
+  // Evaluate Custom Vitals
   const evaluateCustomVital = (title, valStr) => {
     const val = parseFloat(valStr);
     const tLower = (title || '').toLowerCase().trim();
 
     if (isNaN(val)) return { severity: 'NORMAL', text: 'NORMAL' };
 
-    // 1. Temperature / Fever
     if (tLower.includes('temp') || tLower.includes('fever') || tLower.includes('bukhar')) {
       if (val >= 102) return { severity: 'RED', text: 'HIGH FEVER', flag: `Critical Fever (${val} °F)` };
       if (val >= 100.4) return { severity: 'YELLOW', text: 'MODERATE FEVER', flag: `Moderate Fever (${val} °F)` };
@@ -83,21 +163,18 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
       return { severity: 'GREEN', text: 'NORMAL' };
     }
 
-    // 2. Blood Sugar / Glucose (Random mg/dL)
     if (tLower.includes('sugar') || tLower.includes('glucose') || tLower.includes('rbs') || tLower.includes('fbs')) {
       if (val >= 200 || val < 60) return { severity: 'RED', text: 'CRITICAL SUGAR', flag: `Critical Blood Sugar (${val} mg/dL)` };
       if (val >= 140 || val < 70) return { severity: 'YELLOW', text: 'ABNORMAL SUGAR', flag: `Elevated Sugar (${val} mg/dL)` };
       return { severity: 'GREEN', text: 'NORMAL' };
     }
 
-    // 3. Hemoglobin (Hb in g/dL)
     if (tLower.includes('hb') || tLower.includes('hemo') || tLower.includes('anemia')) {
       if (val < 7) return { severity: 'RED', text: 'SEVERE ANEMIA', flag: `Severe Low Hemoglobin (${val} g/dL)` };
       if (val < 10) return { severity: 'YELLOW', text: 'MILD ANEMIA', flag: `Mild Low Hemoglobin (${val} g/dL)` };
       return { severity: 'GREEN', text: 'NORMAL' };
     }
 
-    // 4. Generic / Other numbers
     if (val >= 200 || val <= 30) {
       return { severity: 'YELLOW', text: 'ABNORMAL', flag: `Abnormal ${title} (${val})` };
     }
@@ -105,7 +182,6 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     return { severity: 'GREEN', text: 'NORMAL' };
   };
 
-  // Handle adding custom vital
   const handleAddCustomVital = (e) => {
     e.preventDefault();
     if (!customTitle.trim() || !customValue.trim()) return;
@@ -123,7 +199,7 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     setCustomVitals(prev => prev.filter(item => item.id !== idToRemove));
   };
 
-  // Rule-based AI Urgency Classifier with dynamic Custom Vitals calculation
+  // Rule-based AI Urgency Classifier
   const calculateUrgency = () => {
     const sys = Number(systolic);
     const dia = Number(diastolic);
@@ -135,7 +211,6 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     let hasCustomRed = false;
     let hasCustomYellow = false;
 
-    // Check Core Vitals
     if (sys >= 160 || sys < 85) flags.push(`Critical Blood Pressure (${sys}/${dia} mmHg)`);
     else if (sys >= 140 || sys < 90) flags.push(`Abnormal Blood Pressure (${sys}/${dia} mmHg)`);
 
@@ -148,7 +223,6 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     if (tm >= 102) flags.push(`High Fever (${tm} °F)`);
     else if (tm >= 100.4) flags.push(`Moderate Fever (${tm} °F)`);
 
-    // Check All Custom Vitals dynamically
     customVitals.forEach((cv) => {
       const evalRes = evaluateCustomVital(cv.title, cv.value);
       if (evalRes.severity === 'RED') {
@@ -193,7 +267,6 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     const isRed = triageResult.level.includes('RED');
     const isYellow = triageResult.level.includes('YELLOW');
 
-    // Extract Sugar if added in custom vitals
     const sugarVital = customVitals.find(cv => 
       cv.title && /(sugar|glucose|rbs|fbs)/i.test(cv.title)
     );
@@ -212,6 +285,7 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
       sugar: parsedSugar,
       bloodSugar: parsedSugar,
       notes: clinicalNotes,
+      triageAudioNote: triageAudio,
       customVitals,
       timestamp: new Date().toISOString()
     };
@@ -232,6 +306,9 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
       lastTriage: triageRecord,
       customVitals: customVitals,
       fieldNotes: clinicalNotes,
+      triageAudioNote: triageAudio,
+      // Retain registrationAudioNote if it exists on patient
+      registrationAudioNote: patient?.registrationAudioNote || null,
       status: 'QUEUED_FOR_TELEOPD',
       teleConsultRequested: true,
       hasNewUpdate: true,
@@ -239,12 +316,10 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
     };
 
     try {
-      // 1. Local IndexedDB update (same ID overwrite)
       if (db?.patients) {
         await db.patients.put(updatedPatient);
       }
 
-      // 2. Direct Backend Sync (Strictly In-Place PUT/PATCH)
       if (targetId) {
         const res = await fetch(`/api/patients/${targetId}`, {
           method: 'PUT',
@@ -261,7 +336,6 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
         }
       }
 
-      // 3. Sync to Doctor Dashboard via BroadcastChannel
       try {
         const bc = new BroadcastChannel('swasthya_teleopd_channel');
         bc.postMessage({ type: 'PATIENT_TRIAGE_UPDATED', payload: updatedPatient });
@@ -439,7 +513,7 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
               />
             </div>
 
-            {/* Added Custom Parameter Cards */}
+            {/* Custom Parameter Cards */}
             {customVitals.map((item) => {
               const status = evaluateCustomVital(item.title, item.value);
               
@@ -493,7 +567,7 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
               );
             })}
 
-            {/* Inline Add Box OR Click to Open Add Box */}
+            {/* Add Custom Vital Button/Box */}
             {isAddingCustom ? (
               <div className="p-3 rounded-2xl border-2 border-dashed border-teal-500 bg-teal-50/30 flex flex-col justify-between space-y-2">
                 <div className="space-y-1.5">
@@ -551,32 +625,76 @@ export default function TriageAssessmentModal({ patient, onClose, onSaved }) {
 
           </div>
 
-          {/* Clinical Notes Field */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
+          {/* Clinical Notes & Triage Voice Note Section */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
                 {lang === 'hi' ? 'लक्षण एवं क्लिनिकल नोट्स' : 'Field Clinical Notes & Symptoms'}
               </label>
-              <button
-                type="button"
-                onClick={isListening ? stopListening : startListening}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[10px] font-bold border transition-all ${
-                  isListening 
-                    ? 'bg-rose-500 text-white border-rose-600 animate-pulse' 
-                    : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
-                }`}
-              >
-                {isListening ? <MicOff className="w-3 h-3" /> : <Mic className="w-3 h-3 text-teal-600" />}
-                <span>{isListening ? 'Listening...' : 'Voice Input (Mic)'}</span>
-              </button>
+
+              {/* Record Triage Voice Note */}
+              {!triageAudio && (
+                <button
+                  type="button"
+                  onClick={isRecording ? stopAudioRecording : startAudioRecording}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                    isRecording
+                      ? 'bg-rose-600 text-white animate-pulse shadow-md shadow-rose-600/30'
+                      : 'bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100'
+                  }`}
+                >
+                  {isRecording ? <Square className="w-3.5 h-3.5 fill-current" /> : <Mic className="w-3.5 h-3.5" />}
+                  <span>{isRecording ? `Recording... (${recordingSeconds}s)` : 'Record Triage Voice Note'}</span>
+                </button>
+              )}
             </div>
+
+            {/* Written Field Notes Box */}
             <textarea
-              rows="3"
+              rows="2"
               value={clinicalNotes}
               onChange={(e) => setClinicalNotes(e.target.value)}
-              placeholder="Record any complaints, signs or symptoms observed..."
+              placeholder="Type complaints, symptoms or observations manually..."
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium"
             />
+
+            {/* Triage Voice Note Player / Preview */}
+            {triageAudio && (
+              <div className="p-3 bg-teal-50/80 border border-teal-200 rounded-2xl flex items-center justify-between gap-3 animate-fadeIn">
+                <div className="flex items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={togglePlayAudio}
+                    className="w-8 h-8 rounded-xl bg-teal-600 hover:bg-teal-700 text-white flex items-center justify-center shadow-xs transition-all"
+                  >
+                    {isPlayingAudio ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                  </button>
+                  <div>
+                    <p className="text-xs font-bold text-teal-950">Triage Voice Note Attached</p>
+                    <p className="text-[10px] text-teal-700">Listen before syncing with Doctor</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={deleteAudioRecording}
+                    className="px-2.5 py-1.5 rounded-xl text-rose-600 hover:bg-rose-100 text-xs font-bold transition-all flex items-center gap-1"
+                    title="Delete and re-record"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete</span>
+                  </button>
+                </div>
+
+                <audio
+                  ref={audioPlayerRef}
+                  src={triageAudio}
+                  onEnded={() => setIsPlayingAudio(false)}
+                  className="hidden"
+                />
+              </div>
+            )}
           </div>
 
         </div>

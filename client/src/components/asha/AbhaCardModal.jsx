@@ -1,6 +1,6 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Shield, X, Download, Printer, CheckCircle2 } from 'lucide-react';
+import { Shield, X, Printer, CheckCircle2 } from 'lucide-react';
 
 export default function AbhaCardModal({ patient, onClose }) {
   if (!patient) return null;
