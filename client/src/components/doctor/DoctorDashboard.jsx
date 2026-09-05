@@ -146,11 +146,12 @@ const MASTER_PRESETS = [
   }
 ];
 
+// Exact Time & Date Format
 const formatSafeDate = (rawDate) => {
   if (!rawDate) return 'Just now';
   const d = new Date(rawDate);
   if (isNaN(d.getTime())) return 'Recently';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ', ' + d.toLocaleDateString();
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true }) + ' • ' + d.toLocaleDateString('en-GB');
 };
 
 export default function DoctorDashboard() {
@@ -213,7 +214,7 @@ export default function DoctorDashboard() {
     return raw.replace(/(\s*\(MO\))+/gi, '') + ' (MO)';
   }, [user?.name]);
 
-  // Voice Dictation Toggle
+  // Stable Voice Dictation
   const toggleVoiceDictation = (fieldKey, e) => {
     if (e) {
       e.preventDefault();
@@ -443,12 +444,24 @@ export default function DoctorDashboard() {
     return cards;
   }, [selectedCase]);
 
-  // Sidebar Unique Signed Patients
+  // Set of IDs that have already been signed/consulted
+  const signedPatientIdSet = useMemo(() => {
+    const set = new Set();
+    completedPrescriptions.forEach(rx => {
+      const pid = String(rx.patientId || '').trim();
+      if (pid) set.add(pid);
+    });
+    return set;
+  }, [completedPrescriptions]);
+
+  // Sidebar Unique Signed Patients with Priority to New Triage Updates
   const uniqueSignedPatients = useMemo(() => {
     const patientMap = new Map();
     completedPrescriptions.forEach((rx) => {
       const key = String(rx.patientId || '').trim();
       if (!key) return;
+
+      const rxTime = new Date(rx.updatedAt || rx.timestamp || 0).getTime();
 
       if (!patientMap.has(key)) {
         patientMap.set(key, {
@@ -456,20 +469,30 @@ export default function DoctorDashboard() {
           patientId: rx.patientId,
           patientName: rx.patientName,
           latestRx: rx,
-          consultCount: 1
+          consultCount: 1,
+          hasNewTriageUpdate: Boolean(rx.hasNewTriageUpdate)
         });
       } else {
         const existing = patientMap.get(key);
         existing.consultCount += 1;
-        if (new Date(rx.timestamp || 0) > new Date(existing.latestRx.timestamp || 0)) {
+        if (rx.hasNewTriageUpdate) existing.hasNewTriageUpdate = true;
+
+        const existingTime = new Date(existing.latestRx.updatedAt || existing.latestRx.timestamp || 0).getTime();
+        if (rxTime > existingTime) {
           existing.latestRx = rx;
         }
       }
     });
 
-    return Array.from(patientMap.values()).sort(
-      (a, b) => new Date(b.latestRx.timestamp || 0) - new Date(a.latestRx.timestamp || 0)
-    );
+    return Array.from(patientMap.values()).sort((a, b) => {
+      // First priority: naya triage jisme aaya ho
+      if (a.hasNewTriageUpdate && !b.hasNewTriageUpdate) return -1;
+      if (!a.hasNewTriageUpdate && b.hasNewTriageUpdate) return 1;
+
+      const timeA = new Date(a.latestRx.updatedAt || a.latestRx.timestamp || 0).getTime();
+      const timeB = new Date(b.latestRx.updatedAt || b.latestRx.timestamp || 0).getTime();
+      return timeB - timeA;
+    });
   }, [completedPrescriptions]);
 
   // Past Consultations
@@ -545,6 +568,24 @@ export default function DoctorDashboard() {
     });
   };
 
+  // Rule: Live Queue is ONLY for Fresh/Unsigned Cases
+  const isFreshWaitingCase = (p, currentSignedSet = signedPatientIdSet) => {
+    if (!p) return false;
+    const pid = String(p._id || p.id || '').trim();
+    
+    // Agar patient already signed list me hai -> Queue me nahi aayega!
+    if (currentSignedSet.has(pid)) return false;
+
+    const sev = String(p.severity || p.lastTriage?.severity || '').toUpperCase();
+    return (
+      sev.includes('RED') || 
+      sev.includes('YELLOW') || 
+      Boolean(p.isPregnant) || 
+      p.status === 'QUEUED_FOR_TELEOPD' || 
+      Boolean(p.teleConsultRequested)
+    );
+  };
+
   // Toggle Selection for Live Queue Patient
   const handleSelectPatient = (patient) => {
     const pid = String(patient?._id || patient?.id || '').trim();
@@ -614,6 +655,13 @@ export default function DoctorDashboard() {
     const rx = signedEntry.latestRx;
     const rxPid = String(rx.patientId || '');
 
+    // Reset New Triage Notification flag once opened by doctor
+    setCompletedPrescriptions((prev) =>
+      prev.map((item) =>
+        String(item.patientId || '').trim() === entryKey ? { ...item, hasNewTriageUpdate: false } : item
+      )
+    );
+
     const foundPatient = allPatientsList.find(p => rxPid && String(p._id || p.id) === rxPid) || {
       _id: rxPid || `pat_${Date.now()}`,
       id: rxPid || `pat_${Date.now()}`,
@@ -670,20 +718,7 @@ export default function DoctorDashboard() {
       .map((rule) => ({ id: rule.id, message: rule.message(selectedCase) }));
   }, [selectedCase, prescription.medicines]);
 
-  // Priority Queue Filter Rule
-  const shouldBeInDoctorQueue = (p) => {
-    if (!p) return false;
-    const sev = String(p.severity || p.lastTriage?.severity || '').toUpperCase();
-    return (
-      sev.includes('RED') || 
-      sev.includes('YELLOW') || 
-      Boolean(p.isPregnant) || 
-      p.status === 'QUEUED_FOR_TELEOPD' || 
-      Boolean(p.teleConsultRequested)
-    );
-  };
-
-  // Load Initial Doctor Data
+  // Load Priority Queue
   const loadDoctorData = async () => {
     setLoading(true);
     try {
@@ -692,24 +727,30 @@ export default function DoctorDashboard() {
         fetchPrescriptionsApi()
       ]);
 
+      const initialRx = rxList || [];
+      const uniq = new Map();
+      const signedSet = new Set();
+
+      initialRx.forEach(item => {
+        const key = item._id || `${item.patientId}_${item.timestamp}_${item.diagnosis}`;
+        if (!uniq.has(key)) uniq.set(key, item);
+        const pid = String(item.patientId || '').trim();
+        if (pid) signedSet.add(pid);
+      });
+
+      const parsedRxList = Array.from(uniq.values());
+      setCompletedPrescriptions(parsedRxList);
       setAllPatientsList(patients || []);
 
-      const waiting = (patients || []).filter(shouldBeInDoctorQueue);
+      // Queue me sirf fresh/un-signed cases
+      const waiting = (patients || []).filter(p => isFreshWaitingCase(p, signedSet));
       setActiveQueue(waiting);
 
       setSelectedCase((prev) => {
         if (!prev) return null;
-        const found = waiting.find((p) => (p._id || p.id) === (prev._id || prev.id));
+        const found = (patients || []).find((p) => (p._id || p.id) === (prev._id || prev.id));
         return found || prev;
       });
-
-      const initialRx = rxList || [];
-      const uniq = new Map();
-      initialRx.forEach(item => {
-        const key = item._id || `${item.patientId}_${item.timestamp}_${item.diagnosis}`;
-        if (!uniq.has(key)) uniq.set(key, item);
-      });
-      setCompletedPrescriptions(Array.from(uniq.values()));
     } catch (err) {
       console.error('Doctor queue load failed:', err);
     } finally {
@@ -738,19 +779,43 @@ export default function DoctorDashboard() {
         return [updatedPatient, ...prev];
       });
 
-      setActiveQueue((prev) => {
-        const qualifies = shouldBeInDoctorQueue(updatedPatient);
-        const filtered = prev.filter(p => String(p._id || p.id).trim() !== pid);
+      // Check if already signed
+      const isAlreadySigned = signedPatientIdSet.has(pid);
 
-        if (qualifies) {
-          return [{ ...updatedPatient, hasNewUpdate: true }, ...filtered];
-        }
-        return filtered;
-      });
+      if (isAlreadySigned) {
+        // Queue se hatao agar galti se ho
+        setActiveQueue(prev => prev.filter(p => String(p._id || p.id).trim() !== pid));
 
+        // Signed list me is patient ke entry ko TOP par move karo aur hasNewTriageUpdate mark karo
+        setCompletedPrescriptions((prev) => {
+          const matchingRxList = prev.filter(rx => String(rx.patientId || '').trim() === pid);
+          const otherRxList = prev.filter(rx => String(rx.patientId || '').trim() !== pid);
+
+          const updatedMatches = matchingRxList.map(rx => ({
+            ...rx,
+            hasNewTriageUpdate: true,
+            updatedAt: new Date().toISOString(),
+            vitalsAtConsult: updatedPatient.lastTriage || rx.vitalsAtConsult
+          }));
+
+          return [...updatedMatches, ...otherRxList];
+        });
+      } else {
+        // Naya fresh patient hai -> Live Queue me top par daalo
+        setActiveQueue((prev) => {
+          const qualifies = isFreshWaitingCase(updatedPatient);
+          const filtered = prev.filter(p => String(p._id || p.id).trim() !== pid);
+          if (qualifies) {
+            return [{ ...updatedPatient, hasNewUpdate: true }, ...filtered];
+          }
+          return filtered;
+        });
+      }
+
+      // Agar doctor ne wahi patient khol rakha hai, toh live update dikhao
       setSelectedCase((prev) => {
         if (prev && String(prev._id || prev.id).trim() === pid) {
-          return { ...prev, ...updatedPatient };
+          return { ...prev, ...updatedPatient, hasNewUpdate: false };
         }
         return prev;
       });
@@ -786,7 +851,7 @@ export default function DoctorDashboard() {
         socket.off('patient_deleted', handleIncomingPatientDelete);
       }
     };
-  }, [socket]);
+  }, [socket, signedPatientIdSet]);
 
   const isMatchIncomingCall = (item) => {
     if (!incomingCallData?.patientId || !item || showVideoModal) return false;
@@ -1210,7 +1275,7 @@ export default function DoctorDashboard() {
                               onClick={() => handleDoctorAcceptCall(item)}
                               className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black flex items-center gap-1 shadow-xs cursor-pointer transition-all active:scale-95"
                             >
-                              <Video className="w-3 h-3" /> Connect
+                              <Video className="w-3.5 h-3.5" /> Connect
                             </button>
 
                             <button
@@ -1218,7 +1283,7 @@ export default function DoctorDashboard() {
                               onClick={(e) => handleDoctorRejectCall(item, e)}
                               className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all active:scale-95"
                             >
-                              <X className="w-3 h-3" /> Busy
+                              <X className="w-3.5 h-3.5" /> Busy
                             </button>
                           </div>
                         </div>
@@ -1230,7 +1295,7 @@ export default function DoctorDashboard() {
             )}
           </div>
 
-          {/* Signed Citizens List */}
+          {/* Signed Citizens List with Live Triage Indication */}
           {uniqueSignedPatients.length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
               <div className="flex justify-between items-center">
@@ -1261,16 +1326,34 @@ export default function DoctorDashboard() {
                       <div className="flex justify-between items-start gap-2">
                         <div className="flex-1">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            <p className="font-bold text-slate-900 text-xs">{entry.patientName}</p>
+                            <p className="font-black text-slate-900 text-xs flex items-center gap-1.5">
+                              {entry.patientName}
+                              {/* GREEN PULSATING DOT FOR NEW TRIAGE ON SIGNED PATIENT */}
+                              {entry.hasNewTriageUpdate && (
+                                <span className="relative flex h-2 w-2" title="New Triage Assessment Updated by ASHA">
+                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                </span>
+                              )}
+                            </p>
                             <span className="text-[9px] font-extrabold bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded-md">
                               {entry.consultCount} {entry.consultCount === 1 ? 'Consult' : 'Consults'}
                             </span>
+                            {entry.hasNewTriageUpdate && (
+                              <span className="text-[8px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300 px-1.5 py-0.2 rounded">
+                                New Triage
+                              </span>
+                            )}
                           </div>
+                          
                           <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5 font-medium">
                             {entry.latestRx.diagnosis || 'Clinical Diagnosis Recorded'}
                           </p>
-                          <p className="text-[9px] text-slate-400 mt-1 font-mono">
-                            {formatSafeDate(entry.latestRx.timestamp)}
+                          
+                          {/* EXACT DATE & TIME */}
+                          <p className="text-[9px] text-slate-400 mt-1 font-mono font-bold flex items-center gap-1">
+                            <Clock className="w-2.5 h-2.5 text-slate-400" />
+                            <span>{formatSafeDate(entry.latestRx.updatedAt || entry.latestRx.timestamp)}</span>
                           </p>
                         </div>
 
@@ -1360,7 +1443,7 @@ export default function DoctorDashboard() {
                       <>
                         <span>•</span>
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 border border-teal-200 rounded-lg text-teal-800">
-                          <Volume2 className="w-3.5 h-3.5 text-teal-600" />
+                          <Volume2 className="w-3 h-3 text-teal-600" />
                           <span className="text-[10px] font-bold">Reg. Voice:</span>
                           <button
                             type="button"
