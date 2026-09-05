@@ -38,7 +38,13 @@ import {
   X,
   Activity,
   Pill,
-  Edit3
+  Edit3,
+  PhoneCall,
+  PhoneOff,
+  User,
+  ShieldCheck,
+  Thermometer,
+  Heart
 } from 'lucide-react';
 
 /* --- Clinical Safety Rules --- */
@@ -69,7 +75,7 @@ const SAFETY_RULES = [
   }
 ];
 
-/* --- Master Clinical Presets Repository --- */
+/* --- Master Presets --- */
 const MASTER_PRESETS = [
   {
     id: 'htn-essential',
@@ -143,7 +149,6 @@ const MASTER_PRESETS = [
   }
 ];
 
-// Helper to safely format dates without ever showing 'Invalid Date'
 const formatSafeDate = (rawDate) => {
   if (!rawDate) return 'Just now';
   const d = new Date(rawDate);
@@ -154,9 +159,11 @@ const formatSafeDate = (rawDate) => {
 export default function DoctorDashboard() {
   const { user } = useAuth();
   const { socket } = useSocket();
+
   const [showVideoModal, setShowVideoModal] = useState(false);
   const [showAmbulanceModal, setShowAmbulanceModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+
   const [activeQueue, setActiveQueue] = useState([]);
   const [allPatientsList, setAllPatientsList] = useState([]);
   const [selectedCase, setSelectedCase] = useState(null);
@@ -164,39 +171,55 @@ export default function DoctorDashboard() {
   const [loading, setLoading] = useState(true);
   const [showFieldNotes, setShowFieldNotes] = useState(true);
 
-  // Tracks if doctor is editing a previous prescription
-  const [editingRxId, setEditingRxId] = useState(null);
+  // Incoming Call State
+  const [incomingCallData, setIncomingCallData] = useState(null);
 
-  // Independent toggle state map for accordion in history modal
+  const [editingRxId, setEditingRxId] = useState(null);
   const [expandedRxMap, setExpandedRxMap] = useState({});
 
   const [prescription, setPrescription] = useState({ diagnosis: '', medicines: '', advice: '' });
   const [appliedPresetIds, setAppliedPresetIds] = useState([]);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // Audio Playback States & Refs
+  // Audio Playback
   const [playingRegAudio, setPlayingRegAudio] = useState(false);
   const [playingTriageAudio, setPlayingTriageAudio] = useState(false);
   const regAudioPlayerRef = useRef(null);
   const triageAudioPlayerRef = useRef(null);
 
-  // Clean formatted Doctor name
+  const playSoftChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+        osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch (e) {}
+  };
+
   const cleanDoctorName = useMemo(() => {
     const raw = user?.name || 'Dr. Arvind Sharma (MO)';
     return raw.replace(/(\s*\(MO\))+/gi, '') + ' (MO)';
   }, [user?.name]);
 
-  // Dynamic Vitals Scanner
+  // Vitals Scanner
   const activeAlertVitals = useMemo(() => {
     if (!selectedCase) return [];
-
     const t = selectedCase.lastTriage || selectedCase.triage || {};
     const v = selectedCase.lastVitals || selectedCase.vitals || {};
     const p = selectedCase;
-
     const cards = [];
 
-    // 1. Blood Pressure
     let sys = Number(t.bpSystolic || t.systolic) || 0;
     let dia = Number(t.bpDiastolic || t.diastolic) || 0;
     const rawBp = t.bp || v.bp || p.bp;
@@ -222,7 +245,6 @@ export default function DoctorDashboard() {
       }
     }
 
-    // 2. Pulse Rate
     const pulse = Number(t.pulse || v.pulse || p.pulse) || 0;
     if (pulse > 0) {
       const isRed = pulse >= 130 || pulse < 45;
@@ -239,7 +261,6 @@ export default function DoctorDashboard() {
       }
     }
 
-    // 3. SpO2 Oxygen
     const spo2 = Number(t.spo2 || v.spO2 || v.spo2 || p.spo2) || 0;
     if (spo2 > 0) {
       const isRed = spo2 < 92;
@@ -256,7 +277,6 @@ export default function DoctorDashboard() {
       }
     }
 
-    // 4. Body Temperature
     const temp = Number(t.temp || v.temp || p.temp) || 0;
     if (temp > 0) {
       const isRed = temp >= 102;
@@ -273,7 +293,6 @@ export default function DoctorDashboard() {
       }
     }
 
-    // 5. Blood Sugar
     const directSugar = Number(t.sugar || t.bloodSugar || v.sugar || v.bloodSugar || p.sugar || p.bloodSugar) || 0;
     if (directSugar > 0) {
       const isRed = directSugar >= 200 || directSugar < 60;
@@ -288,43 +307,6 @@ export default function DoctorDashboard() {
           tag: isRed ? (directSugar < 60 ? 'HYPOGLYCEMIA' : 'CRITICAL SUGAR') : 'ABNORMAL GLUCOSE'
         });
       }
-    }
-
-    // 6. Custom Vitals
-    const customList = t.customVitals || p.customVitals || [];
-    if (Array.isArray(customList)) {
-      customList.forEach((cv, idx) => {
-        if (!cv || !cv.title || cv.value === undefined) return;
-        const tLower = cv.title.toLowerCase().trim();
-        const numVal = parseFloat(cv.value);
-        if (isNaN(numVal)) return;
-
-        if (tLower.includes('sugar') && cards.some(c => c.id === 'sugar_direct')) return;
-
-        let level = 'NORMAL';
-        let tag = 'NORMAL';
-
-        if (tLower.includes('sugar') || tLower.includes('glucose') || tLower.includes('rbs')) {
-          if (numVal >= 200 || numVal < 60) { level = 'RED'; tag = 'CRITICAL SUGAR'; }
-          else if (numVal >= 140 || numVal < 70) { level = 'YELLOW'; tag = 'ABNORMAL SUGAR'; }
-        } else if (tLower.includes('temp') || tLower.includes('fever') || tLower.includes('bukhar')) {
-          if (numVal >= 102) { level = 'RED'; tag = 'HIGH FEVER'; }
-          else if (numVal >= 100.4) { level = 'YELLOW'; tag = 'MODERATE FEVER'; }
-        } else if (numVal >= 200 || numVal <= 30) {
-          level = 'YELLOW'; tag = 'ABNORMAL';
-        }
-
-        if (level === 'RED' || level === 'YELLOW') {
-          cards.push({
-            id: `custom_${cv.id || idx}`,
-            label: cv.title.toUpperCase(),
-            value: numVal,
-            unit: tLower.includes('sugar') ? 'mg/dL' : '',
-            level,
-            tag
-          });
-        }
-      });
     }
 
     if (cards.length === 0) {
@@ -357,14 +339,11 @@ export default function DoctorDashboard() {
     return cards;
   }, [selectedCase]);
 
-  // =========================================================================
-  // FIX 1: SIDEBAR SHOWS UNIQUE PATIENTS ONLY (1 Patient = 1 Card)
-  // =========================================================================
+  // Sidebar Unique Signed Patients
   const uniqueSignedPatients = useMemo(() => {
     const patientMap = new Map();
-
     completedPrescriptions.forEach((rx) => {
-      const key = String(rx.patientId || rx.patientName || '').trim().toLowerCase();
+      const key = String(rx.patientId || '').trim();
       if (!key) return;
 
       if (!patientMap.has(key)) {
@@ -378,7 +357,6 @@ export default function DoctorDashboard() {
       } else {
         const existing = patientMap.get(key);
         existing.consultCount += 1;
-        // Keep the latest prescription as primary summary
         if (new Date(rx.timestamp || 0) > new Date(existing.latestRx.timestamp || 0)) {
           existing.latestRx = rx;
         }
@@ -390,24 +368,19 @@ export default function DoctorDashboard() {
     );
   }, [completedPrescriptions]);
 
-  // =========================================================================
-  // FIX 2: GET ALL PAST CONSULTATIONS FOR THE SELECTED CITIZEN
-  // =========================================================================
+  // Past Consultations
   const patientPastConsultations = useMemo(() => {
     if (!selectedCase) return [];
     const pid = String(selectedCase._id || selectedCase.id || '').trim();
-    const pName = String(selectedCase.name || '').trim().toLowerCase();
 
     const matches = completedPrescriptions.filter((rx) => {
       const rxPid = String(rx.patientId || '').trim();
-      const rxPName = String(rx.patientName || '').trim().toLowerCase();
-      return (pid && rxPid === pid) || (pName && rxPName === pName);
+      return pid && rxPid && pid === rxPid;
     });
 
-    // Deduplicate identical prescriptions
     const uniqueMap = new Map();
     matches.forEach((item) => {
-      const uniqueKey = item._id || `${item.patientId || item.patientName}_${item.timestamp}_${item.diagnosis}`;
+      const uniqueKey = item._id || `${item.patientId}_${item.timestamp}_${item.diagnosis}`;
       if (!uniqueMap.has(uniqueKey)) {
         uniqueMap.set(uniqueKey, item);
       }
@@ -424,22 +397,15 @@ export default function DoctorDashboard() {
 
   const isMale = String(selectedCase?.gender || '').toLowerCase().startsWith('m');
 
-  // Filter Presets
   const filteredPresets = useMemo(() => {
     if (!selectedCase) return [];
-
     return MASTER_PRESETS.filter((preset) => {
-      if (isMale && (preset.gender === 'FEMALE' || preset.requiresPregnant)) {
-        return false;
-      }
-      if (preset.requiresPregnant && !isPregnant) {
-        return false;
-      }
+      if (isMale && (preset.gender === 'FEMALE' || preset.requiresPregnant)) return false;
+      if (preset.requiresPregnant && !isPregnant) return false;
       return preset.trigger(selectedCase, activeAlertVitals);
     });
   }, [selectedCase, isMale, isPregnant, activeAlertVitals]);
 
-  // Multi-Preset Append Handler
   const handleApplyPreset = (preset) => {
     setAppliedPresetIds((prev) => 
       prev.includes(preset.id) ? prev : [...prev, preset.id]
@@ -475,7 +441,6 @@ export default function DoctorDashboard() {
     });
   };
 
-  // Select patient from live queue
   const handleSelectPatient = (patient) => {
     const pid = patient._id || patient.id;
     if (regAudioPlayerRef.current) regAudioPlayerRef.current.pause();
@@ -499,7 +464,6 @@ export default function DoctorDashboard() {
     );
   };
 
-  // OPEN A SIGNED CITIZEN FROM SIDEBAR (INTO EDIT/VIEW MODE)
   const handleOpenSignedPatient = (signedEntry) => {
     if (regAudioPlayerRef.current) regAudioPlayerRef.current.pause();
     if (triageAudioPlayerRef.current) triageAudioPlayerRef.current.pause();
@@ -508,13 +472,8 @@ export default function DoctorDashboard() {
 
     const rx = signedEntry.latestRx;
     const rxPid = String(rx.patientId || '');
-    const rxPName = String(rx.patientName || '').toLowerCase();
 
-    // Match patient from full database or use latest Rx snapshot
-    const foundPatient = allPatientsList.find(p => 
-      (rxPid && String(p._id || p.id) === rxPid) || 
-      (String(p.name || '').toLowerCase() === rxPName)
-    ) || {
+    const foundPatient = allPatientsList.find(p => rxPid && String(p._id || p.id) === rxPid) || {
       _id: rxPid || `pat_${Date.now()}`,
       id: rxPid || `pat_${Date.now()}`,
       name: rx.patientName,
@@ -542,16 +501,14 @@ export default function DoctorDashboard() {
     setAppliedPresetIds([]);
   };
 
-  // DELETE ALL PRESCRIPTIONS FOR A CITIZEN FROM SIGNED LIST
   const handleDeleteSignedCitizen = (e, signedEntry) => {
     e.stopPropagation();
     const key = signedEntry.patientKey;
-
     setCompletedPrescriptions((prev) => 
-      prev.filter(item => String(item.patientId || item.patientName || '').trim().toLowerCase() !== key)
+      prev.filter(item => String(item.patientId || '').trim() !== key)
     );
 
-    if (selectedCase && String(selectedCase._id || selectedCase.name || '').trim().toLowerCase() === key) {
+    if (selectedCase && String(selectedCase._id || selectedCase.id || '').trim() === key) {
       setEditingRxId(null);
       setPrescription({ diagnosis: '', medicines: '', advice: '' });
       setSelectedCase(null);
@@ -565,7 +522,6 @@ export default function DoctorDashboard() {
     }));
   };
 
-  // Safety Warnings
   const safetyWarnings = useMemo(() => {
     if (!selectedCase || !prescription.medicines.trim()) return [];
     return SAFETY_RULES
@@ -573,7 +529,7 @@ export default function DoctorDashboard() {
       .map((rule) => ({ id: rule.id, message: rule.message(selectedCase) }));
   }, [selectedCase, prescription.medicines]);
 
-  // Load Priority Queue & All Patients
+  // Load Priority Queue
   const loadDoctorData = async () => {
     setLoading(true);
     try {
@@ -604,11 +560,10 @@ export default function DoctorDashboard() {
         return null;
       });
 
-      // Deduplicate initial Rx list
       const initialRx = rxList || [];
       const uniq = new Map();
       initialRx.forEach(item => {
-        const key = item._id || `${item.patientId || item.patientName}_${item.timestamp}_${item.diagnosis}`;
+        const key = item._id || `${item.patientId}_${item.timestamp}_${item.diagnosis}`;
         if (!uniq.has(key)) uniq.set(key, item);
       });
       setCompletedPrescriptions(Array.from(uniq.values()));
@@ -623,106 +578,133 @@ export default function DoctorDashboard() {
     loadDoctorData();
   }, []);
 
-  // WebSockets & Cross-tab Sync
+  // Strict Unique Identifier Match ONLY
+  const isMatchIncomingCall = (item) => {
+    if (!incomingCallData?.patientId || !item || showVideoModal) return false;
+    const incomingId = String(incomingCallData.patientId).trim();
+    const currentItemId = String(item._id || item.id || item.patientId || '').trim();
+    return Boolean(incomingId && currentItemId && incomingId === currentItemId);
+  };
+
+  // Listen to incoming Tele-Consult Call requests via BroadcastChannel & WebSockets
   useEffect(() => {
-    if (!socket) return;
-
-    socket.on('patient_queue_updated', (patient) => {
-      const pid = patient._id || patient.id;
-      const sev = String(patient.severity || '').toUpperCase();
-      const isUrgent = sev.includes('RED') || sev.includes('YELLOW') || patient.status === 'QUEUED_FOR_TELEOPD';
-
-      if (isUrgent) {
-        setActiveQueue((prev) => {
-          const idx = prev.findIndex((p) => (p._id || p.id) === pid);
-          if (idx !== -1) {
-            const next = [...prev];
-            next[idx] = { ...patient, hasNewUpdate: true };
-            return next;
-          }
-          return [{ ...patient, hasNewUpdate: true }, ...prev];
-        });
-
-        setSelectedCase((prev) => {
-          if ((prev?._id || prev?.id) === pid) {
-            return { ...patient, hasNewUpdate: true };
-          }
-          return prev;
-        });
-      } else {
-        setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
-      }
-    });
-
-    socket.on('patient_deleted', (deletedId) => {
-      setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== deletedId));
-    });
-
-    return () => {
-      socket.off('patient_queue_updated');
-      socket.off('patient_deleted');
-    };
-  }, [socket]);
-
-  useEffect(() => {
-    let channel;
-    let rxChannel;
+    let callChannel;
     try {
-      channel = new BroadcastChannel('swasthya_teleopd_channel');
-      channel.onmessage = (e) => {
-        if (e.data?.type === 'PATIENT_TRIAGE_UPDATED' && e.data?.payload) {
-          const updated = e.data.payload;
-          const pid = updated._id || updated.id;
+      callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
+      callChannel.onmessage = (event) => {
+        const { type, payload } = event.data || {};
+        if (type === 'TELE_CALL_REQUESTED' && payload?.patientId) {
+          if (!showVideoModal) {
+            setIncomingCallData(payload);
+            playSoftChime();
+          }
 
-          setActiveQueue((prev) => {
-            const index = prev.findIndex(p => (p._id || p.id) === pid);
-            if (index !== -1) {
-              const next = [...prev];
-              next[index] = { ...updated, hasNewUpdate: true };
-              return next;
-            }
-            return [{ ...updated, hasNewUpdate: true }, ...prev];
-          });
-
-          setSelectedCase((prev) => {
-            if ((prev?._id || prev?.id) === pid) {
-              return { ...updated, hasNewUpdate: true };
-            }
-            return prev;
-          });
-        } else if (e.data?.type === 'REFRESH_QUEUE') {
-          loadDoctorData();
+          const match = allPatientsList.find(p => 
+            String(p._id || p.id).trim() === String(payload.patientId).trim()
+          );
+          if (match) setSelectedCase(match);
+        } else if (type === 'CALL_TERMINATED') {
+          // Instant dismiss incoming strip & close active video modal
+          setIncomingCallData(null);
+          setShowVideoModal(false);
         }
       };
+    } catch (e) {}
 
-      rxChannel = new BroadcastChannel('swasthya_rx_channel');
-      rxChannel.onmessage = (e) => {
-        if (e.data?.type === 'RX_DISPATCHED' && e.data?.payload) {
-          const incoming = e.data.payload;
-          setCompletedPrescriptions((prev) => {
-            const index = prev.findIndex(p => 
-              (incoming._id && p._id === incoming._id) || 
-              (p.timestamp === incoming.timestamp && p.patientId === incoming.patientId)
-            );
-            if (index !== -1) {
-              const updatedList = [...prev];
-              updatedList[index] = incoming;
-              return updatedList;
-            }
-            return [incoming, ...prev];
-          });
+    if (socket) {
+      socket.on('tele_call_requested', (data) => {
+        if (data?.patientId && !showVideoModal) {
+          setIncomingCallData(data);
+          playSoftChime();
         }
-      };
-    } catch (err) {
-      console.warn(err);
+      });
+
+      socket.on('call_terminated', () => {
+        setIncomingCallData(null);
+        setShowVideoModal(false);
+      });
     }
-    return () => {
-      if (channel) channel.close();
-      if (rxChannel) rxChannel.close();
-    };
-  }, []);
 
-  // SUBMIT OR UPDATE IN-PLACE PRESCRIPTION
+    return () => {
+      if (callChannel) callChannel.close();
+      if (socket) {
+        socket.off('tele_call_requested');
+        socket.off('call_terminated');
+      }
+    };
+  }, [socket, allPatientsList, showVideoModal]);
+
+  // Connect Handler: Instantly clears incoming alert and opens call
+  const handleDoctorAcceptCall = (targetPatient) => {
+    const targetId = String(
+      targetPatient?._id || 
+      targetPatient?.id || 
+      targetPatient?.patientId || 
+      incomingCallData?.patientId || 
+      selectedCase?._id || 
+      ''
+    ).trim();
+
+    const patientObj = 
+      (targetPatient && (targetPatient.name || targetPatient.patientName)) ? targetPatient :
+      allPatientsList.find(p => String(p._id || p.id).trim() === targetId) ||
+      selectedCase || {
+        _id: targetId,
+        id: targetId,
+        name: incomingCallData?.patientName || 'Citizen',
+        age: 26,
+        gender: 'Female',
+        village: 'Field Sub-Center'
+      };
+
+    setSelectedCase(patientObj);
+    // Instant dismiss so yellow strip never stays
+    setIncomingCallData(null);
+    setShowVideoModal(true);
+
+    try {
+      const callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
+      callChannel.postMessage({
+        type: 'DOCTOR_JOINED_CALL',
+        payload: { patientId: targetId }
+      });
+      callChannel.close();
+    } catch (e) {}
+
+    if (socket && targetId) {
+      socket.emit('doctor_joined_call', { patientId: targetId });
+    }
+  };
+
+  // Reject Handler: Instantly clears incoming alert
+  const handleDoctorRejectCall = (targetPatient, e) => {
+    if (e) e.stopPropagation();
+    const targetId = String(targetPatient?._id || targetPatient?.id || targetPatient?.patientId || incomingCallData?.patientId).trim();
+
+    try {
+      const callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
+      callChannel.postMessage({
+        type: 'DOCTOR_BUSY_REJECT',
+        payload: {
+          patientId: targetId,
+          reason: 'Dr. Arvind Sharma is currently attending to physical OPD queue.'
+        }
+      });
+      callChannel.close();
+    } catch (err) {}
+
+    if (socket && targetId) {
+      socket.emit('doctor_busy_reject', {
+        patientId: targetId,
+        reason: 'Doctor is occupied with OPD queue.'
+      });
+    }
+
+    // Clear alert instantly
+    setIncomingCallData(null);
+  };
+
+  // Submit Prescription
   const handleCompleteConsult = async (e) => {
     e.preventDefault();
     if (!selectedCase) return;
@@ -760,10 +742,9 @@ export default function DoctorDashboard() {
         const { data } = await createPrescriptionApi(payload);
         if (data) savedRx = data;
       } catch (apiErr) {
-        console.warn('API fallback to local state:', apiErr);
+        console.warn('API fallback:', apiErr);
       }
 
-      // Update state in-place if editing existing, or add if new
       setCompletedPrescriptions((prev) => {
         if (editingRxId) {
           const idx = prev.findIndex(p => (p._id === editingRxId) || (p.timestamp === editingRxId));
@@ -776,29 +757,24 @@ export default function DoctorDashboard() {
         return [savedRx, ...prev.filter(p => p._id !== savedRx._id)];
       });
 
-      // Broadcast update to ASHA
       try {
         const rxChan = new BroadcastChannel('swasthya_rx_channel');
         rxChan.postMessage({ type: 'RX_DISPATCHED', payload: savedRx });
         rxChan.close();
-      } catch (bcErr) {
-        console.warn(bcErr);
-      }
+      } catch (bcErr) {}
 
       if (socket) socket.emit('prescription_dispatched', savedRx);
 
       try {
         await updatePatientApi(pid, { severity: 'LOW_GREEN', status: 'CONSULT_COMPLETED' });
-      } catch (upErr) {
-        console.warn(upErr);
-      }
+      } catch (upErr) {}
 
       setEditingRxId(null);
       const remaining = activeQueue.filter((p) => (p._id || p.id) !== pid);
       setActiveQueue(remaining);
       setSelectedCase(remaining[0] || null);
     } catch (err) {
-      console.error('Prescription submission failed:', err);
+      console.error(err);
     } finally {
       setIsSubmitted(false);
     }
@@ -808,21 +784,16 @@ export default function DoctorDashboard() {
     try {
       await updatePatientApi(pid, { severity: 'LOW_GREEN' });
       setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) {}
   };
 
   const handleDelete = async (pid) => {
     try {
       await deletePatientApi(pid);
       setActiveQueue((prev) => prev.filter((p) => (p._id || p.id) !== pid));
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) {}
   };
 
-  // Audio Toggles
   const togglePlayRegAudio = () => {
     if (!regAudioPlayerRef.current) return;
     if (playingRegAudio) {
@@ -853,24 +824,54 @@ export default function DoctorDashboard() {
     }
   };
 
-  const resolvedPhone = selectedCase?.phone || 
-    selectedCase?.mobile || 
-    selectedCase?.contactNumber || 
-    selectedCase?.contact || 
-    'Not Provided';
-
-  const resolvedNotes = selectedCase?.fieldNotes || 
-    selectedCase?.lastTriage?.notes || 
-    selectedCase?.notes || 
-    'No primary clinical notes recorded.';
-
+  const resolvedPhone = selectedCase?.phone || selectedCase?.mobile || selectedCase?.contact || 'Not Provided';
+  const resolvedNotes = selectedCase?.fieldNotes || selectedCase?.lastTriage?.notes || selectedCase?.notes || 'No primary clinical notes recorded.';
   const resolvedRegistrationAudio = selectedCase?.registrationAudioNote || null;
   const resolvedTriageAudio = selectedCase?.triageAudioNote || selectedCase?.lastTriage?.triageAudioNote || null;
-
   const flaggedCount = activeAlertVitals.filter(c => c.level !== 'GREEN').length;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 font-sans">
+      
+      {/* GLOBAL INCOMING TELE-CALL FLOATING BANNER (Sirf tab dikhega jab modal khula na ho) */}
+      {incomingCallData && !showVideoModal && (
+        <div className="mb-6 p-4 rounded-3xl bg-amber-500 text-slate-950 border-2 border-amber-300 shadow-2xl flex items-center justify-between gap-4 animate-fadeIn">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-slate-950 text-amber-400 flex items-center justify-center shrink-0">
+              <PhoneCall className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-slate-900">
+                Incoming Tele-Consult Request
+              </p>
+              <p className="text-sm font-black text-slate-950">
+                ASHA is requesting consultation for <span className="underline decoration-slate-950">{incomingCallData.patientName}</span>
+                <span className="font-mono font-bold text-xs ml-2 opacity-80">(ID: {incomingCallData.patientId})</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleDoctorAcceptCall()}
+              className="px-4 py-2 bg-slate-950 hover:bg-slate-900 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow transition-all active:scale-95 cursor-pointer"
+            >
+              <Video className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Connect Call</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDoctorRejectCall()}
+              className="px-3.5 py-2 bg-amber-600/30 hover:bg-amber-600/50 text-slate-950 border border-slate-900/20 rounded-xl text-xs font-bold flex items-center gap-1 transition-all active:scale-95 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Busy / Cut</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-6 border-b border-slate-200 gap-4">
         <div>
@@ -885,7 +886,7 @@ export default function DoctorDashboard() {
         <div className="flex items-center gap-3">
           <button
             onClick={loadDoctorData}
-            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all"
+            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-600' : ''}`} /> Refresh Queue
           </button>
@@ -896,10 +897,11 @@ export default function DoctorDashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-6">
-        {/* Left Side: Priority Queue & Signed Citizens */}
+        
+        {/* Left Side: Live Queue & Signed Citizens */}
         <div className="lg:col-span-4 space-y-4">
           
-          {/* 1. Live Queue */}
+          {/* Live Queue */}
           <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
@@ -917,11 +919,15 @@ export default function DoctorDashboard() {
                 {activeQueue.map((item) => {
                   const pid = item._id || item.id;
                   const isSelected = (selectedCase?._id || selectedCase?.id) === pid && !editingRxId;
+                  const isCalling = isMatchIncomingCall(item);
+
                   return (
                     <div
                       key={pid}
                       className={`p-3.5 rounded-2xl border transition-all ${
-                        isSelected
+                        isCalling
+                          ? 'border-amber-400 bg-amber-50/70 ring-2 ring-amber-400/40'
+                          : isSelected
                           ? 'border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-500/20'
                           : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
                       }`}
@@ -931,7 +937,7 @@ export default function DoctorDashboard() {
                           <div className="flex items-center gap-2">
                             <h4 className="text-sm font-bold text-slate-900">{item.name}</h4>
                             {item.hasNewUpdate && (
-                              <span className="relative flex h-2.5 w-2.5" title="Triage Recently Updated">
+                              <span className="relative flex h-2.5 w-2.5">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                               </span>
@@ -944,15 +950,50 @@ export default function DoctorDashboard() {
                             {item.severity?.replace('_', ' ') || 'QUEUED'}
                           </span>
                         </div>
+
                         <div className="flex items-center gap-1">
-                          <button onClick={() => handleResolve(pid)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg" title="Mark Resolved">
+                          <button onClick={() => handleResolve(pid)} className="p-1.5 text-emerald-600 hover:bg-emerald-100 rounded-lg cursor-pointer" title="Mark Resolved">
                             <Check className="w-3.5 h-3.5" />
                           </button>
-                          <button onClick={() => handleDelete(pid)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded-lg" title="Archive">
+                          <button onClick={() => handleDelete(pid)} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded-lg cursor-pointer" title="Archive">
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
+
+                      {/* INCOMING CALL STRIP ON QUEUE CARD */}
+                      {isCalling && (
+                        <div className="mt-3 p-2.5 rounded-xl bg-white border border-amber-300 flex items-center justify-between gap-2 animate-fadeIn shadow-xs">
+                          <div className="flex items-center gap-1.5">
+                            <PhoneCall className="w-4 h-4 text-amber-600 animate-bounce" />
+                            <div>
+                              <p className="text-[10px] font-black text-amber-900 uppercase tracking-wide">
+                                Tele-Call Requested
+                              </p>
+                              <p className="text-[9px] text-amber-700">ASHA waiting with patient</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleDoctorAcceptCall(item)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black flex items-center gap-1 shadow-xs cursor-pointer transition-all active:scale-95"
+                            >
+                              <Video className="w-3 h-3" /> Connect
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleDoctorRejectCall(item, e)}
+                              className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                              title="Doctor is busy attending OPD queue"
+                            >
+                              <X className="w-3 h-3" /> Busy
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -960,7 +1001,7 @@ export default function DoctorDashboard() {
             )}
           </div>
 
-          {/* 2. DEDUPLICATED SIGNED CITIZENS LIST (1 Patient = 1 Card) */}
+          {/* Signed Citizens List */}
           {uniqueSignedPatients.length > 0 && (
             <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
               <div className="flex justify-between items-center">
@@ -973,43 +1014,74 @@ export default function DoctorDashboard() {
               <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
                 {uniqueSignedPatients.map((entry) => {
                   const isSelected = selectedCase && 
-                    String(selectedCase._id || selectedCase.name || '').trim().toLowerCase() === entry.patientKey;
+                    String(selectedCase._id || selectedCase.id || '').trim() === entry.patientKey;
+                  const isCalling = isMatchIncomingCall(entry);
 
                   return (
                     <div
                       key={entry.patientKey}
                       onClick={() => handleOpenSignedPatient(entry)}
-                      className={`p-3 rounded-2xl border transition-all cursor-pointer flex justify-between items-start gap-2 ${
-                        isSelected
+                      className={`p-3 rounded-2xl border transition-all cursor-pointer flex flex-col gap-2 ${
+                        isCalling
+                          ? 'border-amber-400 bg-amber-50/80 ring-2 ring-amber-400'
+                          : isSelected
                           ? 'border-teal-600 bg-teal-50/80 ring-2 ring-teal-500/30'
-                          : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80 hover:border-slate-300'
+                          : 'border-slate-200 bg-slate-50 hover:bg-slate-100/80'
                       }`}
                     >
-                      <div className="flex-1">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <p className="font-bold text-slate-900 text-xs">{entry.patientName}</p>
-                          <span className="text-[9px] font-extrabold bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded-md">
-                            {entry.consultCount} {entry.consultCount === 1 ? 'Consult' : 'Consults'}
-                          </span>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-bold text-slate-900 text-xs">{entry.patientName}</p>
+                            <span className="text-[9px] font-extrabold bg-teal-100 text-teal-800 px-1.5 py-0.2 rounded-md">
+                              {entry.consultCount} {entry.consultCount === 1 ? 'Consult' : 'Consults'}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5 font-medium">
+                            {entry.latestRx.diagnosis || 'Clinical Diagnosis Recorded'}
+                          </p>
+                          <p className="text-[9px] text-slate-400 mt-1 font-mono">
+                            {formatSafeDate(entry.latestRx.timestamp)}
+                          </p>
                         </div>
-                        <p className="text-[11px] text-slate-600 line-clamp-2 mt-0.5 font-medium">
-                          {entry.latestRx.diagnosis || 'Clinical Diagnosis Recorded'}
-                        </p>
-                        <p className="text-[9px] text-slate-400 mt-1 font-mono">
-                          {formatSafeDate(entry.latestRx.timestamp)}
-                        </p>
-                      </div>
 
-                      <div className="flex items-center gap-1">
                         <button
                           type="button"
                           onClick={(e) => handleDeleteSignedCitizen(e, entry)}
-                          className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                          title="Revoke / Delete Record"
+                          className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                          title="Delete Record"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
+
+                      {/* INCOMING CALL STRIP ON SIGNED CARD */}
+                      {isCalling && (
+                        <div className="p-2 rounded-xl bg-white border border-amber-300 flex items-center justify-between gap-2 shadow-xs animate-fadeIn">
+                          <span className="text-[10px] font-black text-amber-900 flex items-center gap-1">
+                            <PhoneCall className="w-3.5 h-3.5 text-amber-600 animate-bounce" /> ASHA Calling
+                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDoctorAcceptCall(entry);
+                              }}
+                              className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold rounded-lg cursor-pointer"
+                            >
+                              Connect
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => handleDoctorRejectCall(entry, e)}
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-bold rounded-lg cursor-pointer"
+                            >
+                              Busy
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1018,12 +1090,12 @@ export default function DoctorDashboard() {
           )}
         </div>
 
-        {/* Right Side Consultation Workspace */}
+        {/* Right Side: Consultation Workspace */}
         <div className="lg:col-span-8 space-y-6">
           {selectedCase ? (
             <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6">
               
-              {/* Patient Info Header */}
+              {/* Header Info */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
                 <div>
                   <div className="flex items-center gap-2">
@@ -1051,7 +1123,6 @@ export default function DoctorDashboard() {
                       Phone: <strong className="text-slate-800">{resolvedPhone}</strong>
                     </span>
 
-                    {/* Registration Voice Note */}
                     {resolvedRegistrationAudio && (
                       <>
                         <span>•</span>
@@ -1061,8 +1132,7 @@ export default function DoctorDashboard() {
                           <button
                             type="button"
                             onClick={togglePlayRegAudio}
-                            className="w-5 h-5 rounded-full bg-teal-600 hover:bg-teal-700 text-white flex items-center justify-center transition-all"
-                            title={playingRegAudio ? 'Pause' : 'Play Registration Voice'}
+                            className="w-5 h-5 rounded-full bg-teal-600 hover:bg-teal-700 text-white flex items-center justify-center transition-all cursor-pointer"
                           >
                             {playingRegAudio ? <Pause className="w-2.5 h-2.5 fill-current" /> : <Play className="w-2.5 h-2.5 fill-current ml-0.5" />}
                           </button>
@@ -1077,14 +1147,13 @@ export default function DoctorDashboard() {
                     )}
                   </div>
                 </div>
-                
+
                 {/* Actions */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
                     onClick={() => setShowHistoryModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold transition-all shadow-2xs"
-                    title="View Complete Clinical History Timeline"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
                     <History className="w-4 h-4 text-teal-600" />
                     <span>Clinical History ({patientPastConsultations.length})</span>
@@ -1093,7 +1162,7 @@ export default function DoctorDashboard() {
                   <button
                     type="button"
                     onClick={() => setShowAmbulanceModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-all cursor-pointer"
                   >
                     <Truck className="w-4 h-4 text-rose-600" /> Dispatch 108 FRU
                   </button>
@@ -1101,14 +1170,14 @@ export default function DoctorDashboard() {
                   <button
                     type="button"
                     onClick={() => setShowVideoModal(true)}
-                    className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow transition-all"
+                    className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow transition-all cursor-pointer active:scale-95"
                   >
                     <Video className="w-4 h-4" /> Video Call
                   </button>
                 </div>
               </div>
 
-              {/* Dynamic Abnormal Vitals Trigger Strip */}
+              {/* Dynamic Vitals Alert Strip */}
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -1116,7 +1185,7 @@ export default function DoctorDashboard() {
                     Triggered Clinical Vitals & Triage Findings
                   </span>
                   <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${flaggedCount > 0 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>
-                    {flaggedCount > 0 ? `${flaggedCount} Abnormal Parameter(s) Detected` : 'All Base Vitals Normal'}
+                    {flaggedCount > 0 ? `${flaggedCount} Abnormal Parameter(s)` : 'All Base Vitals Normal'}
                   </span>
                 </div>
 
@@ -1165,12 +1234,12 @@ export default function DoctorDashboard() {
                 </div>
               </div>
 
-              {/* Field Notes & Triage Voice Note Accordion */}
+              {/* Field Notes & Voice Note */}
               <div className="border border-slate-200 rounded-2xl overflow-hidden">
                 <button
                   type="button"
                   onClick={() => setShowFieldNotes(!showFieldNotes)}
-                  className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 text-left text-xs font-bold text-slate-700"
+                  className="w-full flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 text-left text-xs font-bold text-slate-700 cursor-pointer"
                 >
                   <span className="flex items-center gap-2">
                     <FileText className="w-3.5 h-3.5 text-emerald-600" /> ASHA Observations & Audio Notes
@@ -1189,10 +1258,9 @@ export default function DoctorDashboard() {
                           <button
                             type="button"
                             onClick={togglePlayTriageAudio}
-                            className="w-7 h-7 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center shadow-xs transition-all"
-                            title={playingTriageAudio ? 'Pause' : 'Play Triage Audio'}
+                            className="w-7 h-7 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center transition-all cursor-pointer"
                           >
-                            {playingTriageAudio ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
+                            {playingTriageAudio ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current ml-0.5" />}
                           </button>
                           <div>
                             <p className="text-xs font-bold text-emerald-950 flex items-center gap-1">
@@ -1201,9 +1269,6 @@ export default function DoctorDashboard() {
                             <p className="text-[10px] text-emerald-700">Recorded live by ASHA during assessment</p>
                           </div>
                         </div>
-                        <span className="text-[9px] font-bold bg-emerald-200/70 text-emerald-900 px-2 py-0.5 rounded-full uppercase">
-                          {playingTriageAudio ? 'Playing...' : 'Audio Ready'}
-                        </span>
                         <audio
                           ref={triageAudioPlayerRef}
                           src={resolvedTriageAudio}
@@ -1220,7 +1285,7 @@ export default function DoctorDashboard() {
                 )}
               </div>
 
-              {/* Contextual 1-Click Quick Presets */}
+              {/* Contextual Presets */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 flex items-center gap-1">
@@ -1233,7 +1298,7 @@ export default function DoctorDashboard() {
                         setAppliedPresetIds([]);
                         setPrescription({ diagnosis: '', medicines: '', advice: '' });
                       }}
-                      className="text-[10px] text-slate-400 hover:text-rose-600 font-bold"
+                      className="text-[10px] text-slate-400 hover:text-rose-600 font-bold cursor-pointer"
                     >
                       Clear Presets
                     </button>
@@ -1248,7 +1313,7 @@ export default function DoctorDashboard() {
                         key={p.id}
                         type="button"
                         onClick={() => handleApplyPreset(p)}
-                        className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 ${
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
                           isApplied
                             ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                             : 'bg-slate-100 hover:bg-emerald-50 hover:text-emerald-800 text-slate-700 border-slate-200'
@@ -1256,14 +1321,13 @@ export default function DoctorDashboard() {
                       >
                         {isApplied && <Check className="w-3 h-3" />}
                         <span>{p.name}</span>
-                        {isApplied && <span className="text-[9px] bg-emerald-700 px-1 rounded text-emerald-100">Added</span>}
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Rx Form */}
+              {/* Prescription Form */}
               <form onSubmit={handleCompleteConsult} className="space-y-3.5">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Clinical Diagnosis</label>
@@ -1326,7 +1390,7 @@ export default function DoctorDashboard() {
                 <button
                   type="submit"
                   disabled={isSubmitted}
-                  className={`w-full py-2.5 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99] ${
+                  className={`w-full py-2.5 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.99] cursor-pointer ${
                     editingRxId 
                       ? 'bg-amber-600 hover:bg-amber-700' 
                       : safetyWarnings.length > 0 
@@ -1337,8 +1401,6 @@ export default function DoctorDashboard() {
                   <Send className="w-4 h-4" />
                   {editingRxId 
                     ? 'Update & Resync Signed Prescription' 
-                    : safetyWarnings.length > 0 
-                    ? 'Sign & Sync (Safety Flag Active)' 
                     : 'Digitally Sign & Sync E-Prescription'}
                 </button>
               </form>
@@ -1351,14 +1413,10 @@ export default function DoctorDashboard() {
         </div>
       </div>
 
-      {/* ========================================================================= */}
-      {/* CLINICAL HISTORY TIMELINE MODAL (ALL PAST ENCOUNTERS OF THIS CITIZEN)     */}
-      {/* ========================================================================= */}
+      {/* Clinical History Modal */}
       {showHistoryModal && selectedCase && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[88vh]">
-            
-            {/* Modal Header */}
             <div className="p-5 border-b border-slate-100 bg-slate-950 text-white flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <div className="w-9 h-9 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center border border-teal-500/30">
@@ -1378,91 +1436,22 @@ export default function DoctorDashboard() {
               </div>
               <button 
                 onClick={() => setShowHistoryModal(false)}
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all"
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-all cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-6 overflow-y-auto space-y-5">
-              
-              {/* CURRENT TRIAGE VITALS SNAPSHOT */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                    <Activity className="w-4 h-4 text-rose-600" />
-                    Latest Active Triage Vitals
-                  </span>
-                  <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">
-                    {selectedCase.lastTriage?.severity || selectedCase.severity || 'RED'}
-                  </span>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                  <div className="flex items-center justify-between text-xs font-bold text-slate-600">
-                    <span>ASHA Field Readings:</span>
-                    <span className="text-[10px] text-slate-400 font-semibold font-mono">
-                      {formatSafeDate(selectedCase.lastTriage?.timestamp)}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-2 text-center font-mono">
-                    <div className="p-2 rounded-xl bg-white border border-slate-200 shadow-2xs">
-                      <span className="block text-[8px] font-bold text-slate-400 uppercase">BP</span>
-                      <span className="text-xs font-black text-slate-900">
-                        {selectedCase.lastTriage?.bpSystolic ? `${selectedCase.lastTriage.bpSystolic}/${selectedCase.lastTriage.bpDiastolic || 80}` : (selectedCase.lastVitals?.bp || '120/80')}
-                      </span>
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-white border border-slate-200 shadow-2xs">
-                      <span className="block text-[8px] font-bold text-slate-400 uppercase">Pulse</span>
-                      <span className="text-xs font-black text-slate-900">
-                        {selectedCase.lastTriage?.pulse || selectedCase.lastVitals?.pulse || 72} bpm
-                      </span>
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-white border border-slate-200 shadow-2xs">
-                      <span className="block text-[8px] font-bold text-slate-400 uppercase">SpO2</span>
-                      <span className="text-xs font-black text-slate-900">
-                        {selectedCase.lastTriage?.spo2 || selectedCase.lastVitals?.spO2 || 98}%
-                      </span>
-                    </div>
-
-                    <div className="p-2 rounded-xl bg-white border border-slate-200 shadow-2xs">
-                      <span className="block text-[8px] font-bold text-slate-400 uppercase">Temp</span>
-                      <span className="text-xs font-black text-slate-900">
-                        {selectedCase.lastTriage?.temp || selectedCase.lastVitals?.temp || 98.6}°F
-                      </span>
-                    </div>
-                  </div>
-
-                  {resolvedNotes && (
-                    <p className="text-[11px] text-slate-600 italic bg-white p-2 rounded-xl border border-slate-200">
-                      "{resolvedNotes}"
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* ALL PREVIOUS CONSULTATIONS CHRONOLOGICAL LIST */}
-              <div className="space-y-3 pt-2 border-t border-slate-200">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Doctor-Signed Consultations ({patientPastConsultations.length})
-                  </h4>
-                  <span className="text-[10px] text-slate-400 font-semibold">Chronological Timeline</span>
-                </div>
+              <div className="space-y-3">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  Doctor-Signed Consultations ({patientPastConsultations.length})
+                </h4>
 
                 {patientPastConsultations.length === 0 ? (
                   <div className="py-8 px-4 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-1.5">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 mx-auto flex items-center justify-center">
-                      <Pill className="w-4 h-4" />
-                    </div>
-                    <h5 className="text-xs font-black text-slate-800">No Prior Consultations Recorded</h5>
-                    <p className="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
-                      This citizen has not yet received a digitally signed prescription.
-                    </p>
+                    <p className="text-xs font-bold text-slate-600">No Prior Consultations Recorded</p>
                   </div>
                 ) : (
                   patientPastConsultations.map((rxItem, idx) => {
@@ -1474,7 +1463,6 @@ export default function DoctorDashboard() {
                         key={rxKey}
                         className="p-4 rounded-2xl border border-slate-200 bg-white hover:border-slate-300 transition-all space-y-3 shadow-2xs"
                       >
-                        {/* Consultation Header */}
                         <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                           <div>
                             <span className="text-xs font-black text-slate-900 block">
@@ -1484,79 +1472,25 @@ export default function DoctorDashboard() {
                               {formatSafeDate(rxItem.timestamp)}
                             </span>
                           </div>
-
-                          <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
-                              By: {rxItem.doctorName || 'Medical Officer'}
-                            </span>
-                            <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                              SIGNED
-                            </span>
-                          </div>
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                            SIGNED
+                          </span>
                         </div>
 
-                        {/* Snapshot of Vitals at that consult */}
-                        {rxItem.vitalsAtConsult && (
-                          <div className="grid grid-cols-4 gap-1.5 text-center font-mono text-[10px]">
-                            <div className="p-1 rounded-lg bg-slate-50 border border-slate-100">
-                              <span className="text-slate-400 block text-[8px]">BP</span>
-                              <strong className="text-slate-800">{rxItem.vitalsAtConsult.bp || '120/80'}</strong>
-                            </div>
-                            <div className="p-1 rounded-lg bg-slate-50 border border-slate-100">
-                              <span className="text-slate-400 block text-[8px]">PULSE</span>
-                              <strong className="text-slate-800">{rxItem.vitalsAtConsult.pulse || 72} bpm</strong>
-                            </div>
-                            <div className="p-1 rounded-lg bg-slate-50 border border-slate-100">
-                              <span className="text-slate-400 block text-[8px]">SPO2</span>
-                              <strong className="text-slate-800">{rxItem.vitalsAtConsult.spo2 || 98}%</strong>
-                            </div>
-                            <div className="p-1 rounded-lg bg-slate-50 border border-slate-100">
-                              <span className="text-slate-400 block text-[8px]">TEMP</span>
-                              <strong className="text-slate-800">{rxItem.vitalsAtConsult.temp || 98.6}°</strong>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Expandable Prescription Button */}
                         <button
                           type="button"
                           onClick={() => toggleExpandRx(rxKey)}
-                          className={`w-full py-1.5 px-3 rounded-xl text-xs font-bold flex items-center justify-between transition-all ${
-                            isRxOpen 
-                              ? 'bg-teal-600 text-white shadow-xs' 
-                              : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200'
-                          }`}
+                          className="w-full py-1.5 px-3 rounded-xl text-xs font-bold flex items-center justify-between bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 cursor-pointer"
                         >
-                          <span className="flex items-center gap-1.5">
-                            <Pill className="w-3.5 h-3.5" />
-                            <span>{isRxOpen ? 'Hide Prescription Details' : 'Show Prescription Details'}</span>
-                          </span>
+                          <span>{isRxOpen ? 'Hide Details' : 'Show Details'}</span>
                           {isRxOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
 
-                        {/* Expanded Full Prescription Details */}
                         {isRxOpen && (
-                          <div className="p-3.5 rounded-xl bg-slate-50/80 border border-teal-200 space-y-2.5 animate-fadeIn">
-                            <div>
-                              <span className="block text-[9px] font-black uppercase text-slate-400">Diagnosis Recorded:</span>
-                              <p className="text-xs font-black text-teal-950 mt-0.5">{rxItem.diagnosis || 'Clinical Diagnosis'}</p>
-                            </div>
-
-                            <div>
-                              <span className="block text-[9px] font-black uppercase text-slate-400">Medicines Prescribed:</span>
-                              <div className="p-2.5 rounded-lg bg-white border border-slate-200 font-mono text-xs font-bold text-slate-900 whitespace-pre-line leading-relaxed shadow-2xs mt-0.5">
-                                {rxItem.medicines || 'No medicines recorded.'}
-                              </div>
-                            </div>
-
-                            {rxItem.advice && (
-                              <div>
-                                <span className="block text-[9px] font-black uppercase text-slate-400">Doctor Advice & Instructions:</span>
-                                <p className="text-xs text-slate-700 bg-amber-50 p-2 rounded-lg border border-amber-200 font-medium mt-0.5">
-                                  {rxItem.advice}
-                                </p>
-                              </div>
-                            )}
+                          <div className="p-3 rounded-xl bg-slate-50 border border-teal-200 space-y-2 text-xs">
+                            <p><strong>Diagnosis:</strong> {rxItem.diagnosis}</p>
+                            <p className="font-mono whitespace-pre-line"><strong>Medicines:</strong><br />{rxItem.medicines}</p>
+                            {rxItem.advice && <p><strong>Advice:</strong> {rxItem.advice}</p>}
                           </div>
                         )}
                       </div>
@@ -1564,20 +1498,7 @@ export default function DoctorDashboard() {
                   })
                 )}
               </div>
-
             </div>
-
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end">
-              <button
-                type="button"
-                onClick={() => setShowHistoryModal(false)}
-                className="px-5 py-2 text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 rounded-xl transition-all shadow-xs"
-              >
-                Close History
-              </button>
-            </div>
-
           </div>
         </div>
       )}
@@ -1592,11 +1513,25 @@ export default function DoctorDashboard() {
       )}
 
       {/* Video Call Modal */}
-      {showVideoModal && selectedCase && (
+      {showVideoModal && (
         <TeleConsultModal
-          patient={{ ...selectedCase, patientName: selectedCase.name, ashaName: 'Sunita Devi' }}
-          onClose={() => setShowVideoModal(false)}
-          onEndCall={() => setShowVideoModal(false)}
+          patient={selectedCase || {
+            _id: incomingCallData?.patientId || 'session_call',
+            id: incomingCallData?.patientId || 'session_call',
+            name: incomingCallData?.patientName || 'Citizen',
+            age: 26,
+            gender: 'Female',
+            village: 'Field Sub-Center'
+          }}
+          isDoctor={true}
+          onClose={() => {
+            setShowVideoModal(false);
+            setIncomingCallData(null);
+          }}
+          onEndCall={() => {
+            setShowVideoModal(false);
+            setIncomingCallData(null);
+          }}
         />
       )}
     </div>

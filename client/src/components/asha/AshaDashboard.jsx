@@ -108,6 +108,18 @@ export default function AshaDashboard() {
   const audioPlayerRef = useRef(null);
   const audioStreamRef = useRef(null);
 
+  // Force stop speech recognition and mic streams if Tele-consult is triggered
+  useEffect(() => {
+    if (selectedPatientForTele) {
+      if (isListening && stopListening) {
+        stopListening();
+      }
+      if (audioRecorderRef.current && isAudioRecording) {
+        stopRegistrationAudio();
+      }
+    }
+  }, [selectedPatientForTele, isListening, isAudioRecording]);
+
   useEffect(() => {
     if (transcript) {
       setFormData((prev) => ({
@@ -117,6 +129,7 @@ export default function AshaDashboard() {
     }
   }, [transcript]);
 
+  // Clean all hardware audio streams on unmount
   useEffect(() => {
     return () => {
       if (audioTimerRef.current) clearInterval(audioTimerRef.current);
@@ -124,10 +137,17 @@ export default function AshaDashboard() {
         audioRecorderRef.current.stop();
       }
       if (audioStreamRef.current) {
-        audioStreamRef.current.getTracks().forEach(track => track.stop());
+        audioStreamRef.current.getTracks().forEach(track => {
+          track.stop();
+          track.enabled = false;
+        });
+        audioStreamRef.current = null;
       }
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
+      }
+      if (isListening && stopListening) {
+        stopListening();
       }
     };
   }, []);
@@ -162,7 +182,10 @@ export default function AshaDashboard() {
         };
 
         if (audioStreamRef.current) {
-          audioStreamRef.current.getTracks().forEach(track => track.stop());
+          audioStreamRef.current.getTracks().forEach(track => {
+            track.stop();
+            track.enabled = false;
+          });
           audioStreamRef.current = null;
         }
       };
@@ -186,6 +209,13 @@ export default function AshaDashboard() {
       setIsAudioRecording(false);
       if (audioTimerRef.current) clearInterval(audioTimerRef.current);
     }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
+      audioStreamRef.current = null;
+    }
   };
 
   const deleteRegistrationAudio = () => {
@@ -193,6 +223,13 @@ export default function AshaDashboard() {
     setIsPlayingAudio(false);
     setRegAudioBase64(null);
     setAudioSeconds(0);
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
+      audioStreamRef.current = null;
+    }
   };
 
   const togglePlayAudio = () => {
@@ -229,6 +266,31 @@ export default function AshaDashboard() {
   useEffect(() => {
     loadPatientsAndRx();
   }, []);
+
+  // Sync listener to kill active call if doctor terminates session
+  useEffect(() => {
+    let callChannel;
+    try {
+      callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
+      callChannel.onmessage = (event) => {
+        const { type } = event.data || {};
+        if (type === 'CALL_TERMINATED') {
+          setSelectedPatientForTele(null);
+        }
+      };
+    } catch (e) {}
+
+    if (socket) {
+      socket.on('call_terminated', () => {
+        setSelectedPatientForTele(null);
+      });
+    }
+
+    return () => {
+      if (callChannel) callChannel.close();
+      if (socket) socket.off('call_terminated');
+    };
+  }, [socket]);
 
   useEffect(() => {
     const handleIncomingPrescription = (rxData) => {
@@ -705,7 +767,6 @@ export default function AshaDashboard() {
           />
         </div>
 
-        {/* 1-Tap Filter Pills */}
         <div className="flex items-center gap-1.5 p-1 bg-white border border-slate-200 rounded-2xl shadow-2xs w-full sm:w-auto overflow-x-auto">
           {[
             { id: 'ALL', label: lang === 'hi' ? (t?.allSeverity || 'सभी केस') : 'All Cases' },
@@ -748,13 +809,15 @@ export default function AshaDashboard() {
             .slice(0, 2)
             .toUpperCase();
 
+          const isCurrentActiveCall = selectedPatientForTele && String(selectedPatientForTele._id || selectedPatientForTele.id).trim() === String(pid).trim();
+          const isAnotherCallActive = selectedPatientForTele && String(selectedPatientForTele._id || selectedPatientForTele.id).trim() !== String(pid).trim();
+
           return (
             <div 
               key={pid}
               className="bg-white rounded-3xl border border-slate-200/90 p-5 shadow-sm hover:shadow-xl hover:border-teal-200 transition-all duration-300 flex flex-col justify-between space-y-4 relative overflow-hidden group hover:-translate-y-1"
             >
               <div className="space-y-3">
-                {/* Header: Avatar, Name, Actions */}
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs shrink-0 shadow-2xs ${
@@ -811,7 +874,6 @@ export default function AshaDashboard() {
                   </div>
                 </div>
 
-                {/* Sub Badges */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {patient.isPregnant && (
                     <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-pink-50 border border-pink-200 text-pink-700 text-[10px] font-bold">
@@ -828,7 +890,6 @@ export default function AshaDashboard() {
                   )}
                 </div>
 
-                {/* Prescription Ready Banner */}
                 {matchCount > 0 && (
                   <div className="flex items-center justify-between p-2.5 rounded-2xl bg-gradient-to-r from-teal-50 to-emerald-50 border border-teal-200/90 shadow-2xs">
                     <span className="text-[10px] font-black text-teal-900 flex items-center gap-1.5">
@@ -849,7 +910,6 @@ export default function AshaDashboard() {
                 )}
               </div>
 
-              {/* Patient Basic Info Strip */}
               <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-slate-100 space-y-2 text-xs text-slate-600 font-medium">
                 <div className="flex items-center justify-between">
                   <span className="text-slate-400">{lang === 'hi' ? 'फ़ोन नंबर:' : 'Phone Contact:'}</span>
@@ -862,7 +922,6 @@ export default function AshaDashboard() {
                   </span>
                 </div>
 
-                {/* Vitals Grid Strip */}
                 {triage && (triage.spo2 || triage.bpSystolic || triage.pulse || triage.temp) ? (
                   <div className="pt-2 border-t border-slate-200/70 space-y-1.5">
                     <div className="flex items-center justify-between">
@@ -921,7 +980,6 @@ export default function AshaDashboard() {
                 )}
               </div>
 
-              {/* Status Pill & Action Buttons */}
               <div className="space-y-3 pt-1 border-t border-slate-100">
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
@@ -931,8 +989,6 @@ export default function AshaDashboard() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
-                  
-                  {/* Triage Button */}
                   <button
                     type="button"
                     onClick={() => setSelectedPatientForTriage(patient)}
@@ -942,7 +998,6 @@ export default function AshaDashboard() {
                     <span>{lang === 'hi' ? (t?.btnTriage || 'ट्रायज') : 'Triage'}</span>
                   </button>
 
-                  {/* ABHA Pass Button */}
                   <button
                     type="button"
                     onClick={() => setSelectedPatientForAbha(patient)}
@@ -952,16 +1007,45 @@ export default function AshaDashboard() {
                     <span>{lang === 'hi' ? (t?.btnAbha || 'आभा कार्ड') : 'ABHA Pass'}</span>
                   </button>
 
-                  {/* Tele-OPD Button */}
                   <button
                     type="button"
-                    onClick={() => setSelectedPatientForTele(patient)}
-                    className="group/btn relative px-2.5 py-2.5 rounded-2xl bg-gradient-to-b from-sky-50 to-blue-100/70 hover:from-blue-600 hover:to-indigo-600 text-blue-950 hover:text-white border border-blue-200 hover:border-blue-600 text-[11px] font-black transition-all duration-200 flex items-center justify-center gap-1.5 active:scale-95 shadow-xs hover:shadow-md hover:shadow-blue-600/20 hover:-translate-y-0.5 cursor-pointer"
+                    disabled={isAnotherCallActive}
+                    onClick={() => {
+                      if (isCurrentActiveCall) {
+                        setSelectedPatientForTele(null);
+                        try {
+                          const ch = new BroadcastChannel('swasthya_teleconsult_channel');
+                          ch.postMessage({ type: 'CALL_TERMINATED', payload: { patientId: pid } });
+                          ch.close();
+                        } catch (e) {}
+                        if (socket) {
+                          socket.emit('call_terminated', { patientId: pid });
+                        }
+                      } else {
+                        setSelectedPatientForTele(patient);
+                      }
+                    }}
+                    className={`group/btn relative px-2.5 py-2.5 rounded-2xl text-[11px] font-black transition-all duration-200 flex items-center justify-center gap-1.5 shadow-xs ${
+                      isCurrentActiveCall
+                        ? 'bg-amber-500 text-slate-950 border border-amber-600 ring-2 ring-amber-400/50 animate-pulse cursor-pointer'
+                        : isAnotherCallActive
+                        ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                        : 'bg-gradient-to-b from-sky-50 to-blue-100/70 hover:from-blue-600 hover:to-indigo-600 text-blue-950 hover:text-white border border-blue-200 hover:border-blue-600 hover:shadow-md hover:shadow-blue-600/20 hover:-translate-y-0.5 cursor-pointer active:scale-95'
+                    }`}
                   >
-                    <Video className="w-3.5 h-3.5 text-blue-700 group-hover/btn:text-white transition-colors group-hover/btn:scale-110" />
-                    <span>{lang === 'hi' ? (t?.btnTele || 'टेली-परामर्श') : 'Tele-OPD'}</span>
+                    <Video className={`w-3.5 h-3.5 transition-colors ${
+                      isCurrentActiveCall 
+                        ? 'text-slate-950 animate-bounce' 
+                        : isAnotherCallActive 
+                        ? 'text-slate-400' 
+                        : 'text-blue-700 group-hover/btn:text-white group-hover/btn:scale-110'
+                    }`} />
+                    <span>
+                      {isCurrentActiveCall 
+                        ? (lang === 'hi' ? 'कॉल काटें ✕' : 'Cancel Call ✕') 
+                        : (lang === 'hi' ? (t?.btnTele || 'टेली-परामर्श') : 'Tele-OPD')}
+                    </span>
                   </button>
-
                 </div>
               </div>
 
@@ -1112,7 +1196,6 @@ export default function AshaDashboard() {
                 />
               </div>
 
-              {/* Real Audio Recording Section */}
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
@@ -1248,12 +1331,10 @@ export default function AshaDashboard() {
         </div>
       )}
 
-      {/* Prescription Viewer & Print Slip Modal */}
+      {/* Prescription Viewer */}
       {selectedRxPatient && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
-            
-            {/* Modal Header */}
             <div className="bg-slate-950 p-5 text-white flex items-center justify-between no-print">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-400 flex items-center justify-center border border-teal-500/30">
@@ -1276,7 +1357,6 @@ export default function AshaDashboard() {
               </button>
             </div>
 
-            {/* Encounter History Tabs */}
             {patientRxHistoryList.length > 1 && (
               <div className="p-3 bg-slate-100 border-b border-slate-200 flex items-center gap-2 overflow-x-auto no-print">
                 <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 shrink-0 flex items-center gap-1">
@@ -1298,9 +1378,7 @@ export default function AshaDashboard() {
                       }`}
                     >
                       <span>#{patientRxHistoryList.length - idx}</span>
-                      <span className="text-[10px] opacity-80 font-normal">
-                        ({dateLabel})
-                      </span>
+                      <span className="text-[10px] opacity-80 font-normal">({dateLabel})</span>
                       {idx === 0 && (
                         <span className="text-[8px] bg-teal-800 text-teal-100 px-1 rounded uppercase font-bold">
                           {lang === 'hi' ? 'नवीनतम' : 'Latest'}
@@ -1312,11 +1390,9 @@ export default function AshaDashboard() {
               </div>
             )}
 
-            {/* Printable Slip Content */}
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               {activeRx ? (
                 <>
-                  {/* Doctor & ABDM Header */}
                   <div className="border-b-2 border-slate-800 pb-3 flex justify-between items-start">
                     <div>
                       <h2 className="text-base font-black text-slate-900 tracking-tight uppercase">
@@ -1339,7 +1415,6 @@ export default function AshaDashboard() {
                     </div>
                   </div>
 
-                  {/* Citizen Details */}
                   <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     <div>
                       <span className="text-[10px] font-bold text-slate-400 block uppercase">
@@ -1369,7 +1444,6 @@ export default function AshaDashboard() {
                     </div>
                   </div>
 
-                  {/* Vitals at consult */}
                   {activeRx.vitalsAtConsult && (
                     <div className="p-2.5 bg-teal-50/70 border border-teal-200 rounded-xl">
                       <span className="text-[9px] font-black uppercase text-teal-900 block mb-1">
@@ -1396,7 +1470,6 @@ export default function AshaDashboard() {
                     </div>
                   )}
 
-                  {/* Diagnosis */}
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                       {lang === 'hi' ? 'क्लिनिकल डायग्नोसिस' : 'Clinical Diagnosis'}
@@ -1406,7 +1479,6 @@ export default function AshaDashboard() {
                     </p>
                   </div>
 
-                  {/* Prescribed Medicines */}
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
                       <Pill className="w-3.5 h-3.5 text-teal-600" />
@@ -1417,7 +1489,6 @@ export default function AshaDashboard() {
                     </div>
                   </div>
 
-                  {/* Doctor Advice */}
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
                       {lang === 'hi' ? 'डॉक्टर के निर्देश एवं सलाह' : 'Doctor Directives & Advice'}
@@ -1444,7 +1515,6 @@ export default function AshaDashboard() {
               )}
             </div>
 
-            {/* Actions */}
             <div className="flex items-center justify-end gap-2 p-4 border-t border-slate-200 bg-slate-50 no-print">
               <button
                 type="button"
@@ -1488,6 +1558,7 @@ export default function AshaDashboard() {
         <TeleConsultModal
           patient={selectedPatientForTele}
           onClose={() => setSelectedPatientForTele(null)}
+          onEndCall={() => setSelectedPatientForTele(null)}
         />
       )}
 
