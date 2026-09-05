@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { useSocket } from '../../context/SocketContext';
 import { 
@@ -37,11 +37,11 @@ export default function TeleConsultModal({
   const [remoteVideoMuted, setRemoteVideoMuted] = useState(false);
   const [audioMuted, setAudioMuted] = useState(false);
   
-  const [callStatus, setCallStatus] = useState(isDoctor ? 'CONNECTED' : 'CONNECTING');
+  const [callStatus, setCallStatus] = useState('CONNECTING');
   const [busyReason, setBusyReason] = useState('');
   const [callSeconds, setCallSeconds] = useState(0);
 
-  // Floating Window Controls
+  // Position & PiP Controls
   const [isMinimized, setIsMinimized] = useState(false);
   const [position, setPosition] = useState(() => {
     const width = typeof window !== 'undefined' ? Math.min(window.innerWidth * 0.9, 820) : 820;
@@ -59,8 +59,6 @@ export default function TeleConsultModal({
   const pcRef = useRef(null);
   const timerRef = useRef(null);
   const channelRef = useRef(null);
-  
-  // Strict Master Track Tracker for 100% Clean Hardware Kill
   const masterTracksRef = useRef([]);
 
   const handleMouseDown = (e) => {
@@ -103,9 +101,8 @@ export default function TeleConsultModal({
     };
   }, [isDragging, isMinimized]);
 
-  // ABSOLUTE HARDWARE KILL (Camera & Mic Indicator Instantly Gone)
-  const killHardwareMedia = () => {
-    // 1. Stop all registered tracks immediately
+  // Teardown Hardware Media
+  const killHardwareMedia = useCallback(() => {
     masterTracksRef.current.forEach((track) => {
       try {
         track.stop();
@@ -114,7 +111,6 @@ export default function TeleConsultModal({
     });
     masterTracksRef.current = [];
 
-    // 2. Stop localStream direct tracks
     if (localStream) {
       try {
         localStream.getTracks().forEach((track) => {
@@ -124,7 +120,6 @@ export default function TeleConsultModal({
       } catch (e) {}
     }
 
-    // 3. Stop remoteStream direct tracks
     if (remoteStream) {
       try {
         remoteStream.getTracks().forEach((track) => {
@@ -134,7 +129,6 @@ export default function TeleConsultModal({
       } catch (e) {}
     }
 
-    // 4. Detach stream pointers from DOM elements
     if (localVideoRef.current) {
       localVideoRef.current.pause();
       localVideoRef.current.srcObject = null;
@@ -144,7 +138,6 @@ export default function TeleConsultModal({
       remoteVideoRef.current.srcObject = null;
     }
 
-    // 5. Close WebRTC PeerConnection & Senders
     if (pcRef.current) {
       try {
         pcRef.current.getSenders().forEach((sender) => {
@@ -157,13 +150,16 @@ export default function TeleConsultModal({
 
     setLocalStream(null);
     setRemoteStream(null);
-  };
+  }, [localStream, remoteStream]);
 
-  // Hardware Initialization
+  // Request Camera & Mic
   useEffect(() => {
     let activeStream = null;
 
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    navigator.mediaDevices.getUserMedia({ 
+      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, 
+      audio: { echoCancellation: true, noiseSuppression: true } 
+    })
       .then((stream) => {
         activeStream = stream;
         masterTracksRef.current = stream.getTracks();
@@ -179,7 +175,7 @@ export default function TeleConsultModal({
             masterTracksRef.current = aStream.getTracks();
             setLocalStream(aStream);
           })
-          .catch((e) => console.warn('Media hardware unavailable:', e));
+          .catch((e) => console.warn('Media fallback:', e));
       });
 
     return () => {
@@ -193,14 +189,29 @@ export default function TeleConsultModal({
     };
   }, []);
 
-  // WebRTC PeerConnection & BroadcastChannel Signalling
+  // Sync ref to stream on rerenders
+  useEffect(() => {
+    if (localVideoRef.current && localStream && localVideoRef.current.srcObject !== localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream, videoMuted]);
+
+  // Signaling & Handshake
   useEffect(() => {
     if (!uniquePatientId) return;
 
-    const channel = new BroadcastChannel('swasthya_teleconsult_channel');
-    channelRef.current = channel;
+    let channel = null;
+    try {
+      channel = new BroadcastChannel('swasthya_teleconsult_channel');
+      channelRef.current = channel;
+    } catch (e) {}
 
-    const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
     const pc = new RTCPeerConnection(configuration);
     pcRef.current = pc;
 
@@ -219,49 +230,37 @@ export default function TeleConsultModal({
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        channel.postMessage({
-          type: 'WEBRTC_ICE_CANDIDATE',
-          payload: { candidate: event.candidate, patientId: uniquePatientId }
-        });
+        const candidatePayload = { candidate: event.candidate, patientId: uniquePatientId };
+        if (socket) socket.emit('webrtc_ice_candidate', candidatePayload);
+        if (channel) channel.postMessage({ type: 'WEBRTC_ICE_CANDIDATE', payload: candidatePayload });
       }
     };
 
     if (!isDoctor) {
-      channel.postMessage({
-        type: 'TELE_CALL_REQUESTED',
-        payload: {
-          patientId: uniquePatientId,
-          patientName: patient?.name || patient?.patientName || 'Citizen',
-          ashaName: patient?.ashaName || 'Field ASHA'
-        }
-      });
-      if (socket) {
-        socket.emit('tele_call_requested', {
-          patientId: uniquePatientId,
-          patientName: patient?.name || patient?.patientName || 'Citizen'
-        });
-      }
+      const payload = { patientId: uniquePatientId };
+      if (socket) socket.emit('asha_joined_call', payload);
+      if (channel) channel.postMessage({ type: 'ASHA_JOINED_CALL', payload });
+      setCallStatus('CONNECTED');
+    } else {
+      setCallStatus('CONNECTED');
     }
 
     if (isDoctor && localStream) {
-      pc.createOffer()
+      pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true })
         .then((offer) => pc.setLocalDescription(offer))
         .then(() => {
-          channel.postMessage({
-            type: 'WEBRTC_OFFER',
-            payload: { sdp: pc.localDescription, patientId: uniquePatientId }
-          });
+          const offerPayload = { sdp: pc.localDescription, patientId: uniquePatientId };
+          if (socket) socket.emit('webrtc_offer', offerPayload);
+          if (channel) channel.postMessage({ type: 'WEBRTC_OFFER', payload: offerPayload });
         })
         .catch(() => {});
     }
 
-    channel.onmessage = async (event) => {
-      const { type, payload } = event.data || {};
+    const handleIncomingSignal = async (type, payload) => {
       const incomingId = String(payload?.patientId || '').trim();
-
       if (incomingId !== uniquePatientId) return;
 
-      if (type === 'DOCTOR_JOINED_CALL') {
+      if (type === 'DOCTOR_JOINED_CALL' || type === 'ASHA_JOINED_CALL') {
         setCallStatus('CONNECTED');
       } else if (type === 'DOCTOR_BUSY_REJECT') {
         setCallStatus('BUSY_REJECTED');
@@ -269,16 +268,20 @@ export default function TeleConsultModal({
       } else if (type === 'CALL_TERMINATED') {
         triggerEndSequence();
       } else if (type === 'TOGGLE_REMOTE_VIDEO') {
-        setRemoteVideoMuted(Boolean(payload?.videoMuted));
+        const senderIsDoctor = payload?.senderRole === 'DOCTOR';
+        if (isDoctor && !senderIsDoctor) {
+          setRemoteVideoMuted(Boolean(payload?.videoMuted));
+        } else if (!isDoctor && senderIsDoctor) {
+          setRemoteVideoMuted(Boolean(payload?.videoMuted));
+        }
       } else if (type === 'WEBRTC_OFFER' && !isDoctor && pc) {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
-          channel.postMessage({
-            type: 'WEBRTC_ANSWER',
-            payload: { sdp: pc.localDescription, patientId: uniquePatientId }
-          });
+          const answerPayload = { sdp: pc.localDescription, patientId: uniquePatientId };
+          if (socket) socket.emit('webrtc_answer', answerPayload);
+          if (channel) channel.postMessage({ type: 'WEBRTC_ANSWER', payload: answerPayload });
           setCallStatus('CONNECTED');
         } catch (e) {}
       } else if (type === 'WEBRTC_ANSWER' && isDoctor && pc) {
@@ -293,13 +296,41 @@ export default function TeleConsultModal({
       }
     };
 
+    if (channel) {
+      channel.onmessage = (event) => {
+        const { type, payload } = event.data || {};
+        handleIncomingSignal(type, payload);
+      };
+    }
+
+    if (socket) {
+      socket.on('doctor_joined_call', (data) => handleIncomingSignal('DOCTOR_JOINED_CALL', data));
+      socket.on('asha_joined_call', (data) => handleIncomingSignal('ASHA_JOINED_CALL', data));
+      socket.on('doctor_busy_reject', (data) => handleIncomingSignal('DOCTOR_BUSY_REJECT', data));
+      socket.on('webrtc_offer', (data) => handleIncomingSignal('WEBRTC_OFFER', data));
+      socket.on('webrtc_answer', (data) => handleIncomingSignal('WEBRTC_ANSWER', data));
+      socket.on('webrtc_ice_candidate', (data) => handleIncomingSignal('WEBRTC_ICE_CANDIDATE', data));
+      socket.on('toggle_remote_video', (data) => handleIncomingSignal('TOGGLE_REMOTE_VIDEO', data));
+      socket.on('call_terminated', (data) => handleIncomingSignal('CALL_TERMINATED', data));
+    }
+
     return () => {
-      channel.close();
+      if (channel) channel.close();
+      if (socket) {
+        socket.off('doctor_joined_call');
+        socket.off('asha_joined_call');
+        socket.off('doctor_busy_reject');
+        socket.off('webrtc_offer');
+        socket.off('webrtc_answer');
+        socket.off('webrtc_ice_candidate');
+        socket.off('toggle_remote_video');
+        socket.off('call_terminated');
+      }
       if (pc) pc.close();
     };
-  }, [uniquePatientId, isDoctor, localStream]);
+  }, [uniquePatientId, isDoctor, localStream, socket]);
 
-  // Duration Timer
+  // Timer
   useEffect(() => {
     if (callStatus === 'CONNECTED') {
       timerRef.current = setInterval(() => setCallSeconds((p) => p + 1), 1000);
@@ -325,12 +356,16 @@ export default function TeleConsultModal({
       });
       setVideoMuted(nextMuted);
 
+      const payload = { 
+        patientId: uniquePatientId, 
+        videoMuted: nextMuted,
+        senderRole: isDoctor ? 'DOCTOR' : 'ASHA'
+      };
+
+      if (socket) socket.emit('toggle_remote_video', payload);
       try {
         const ch = new BroadcastChannel('swasthya_teleconsult_channel');
-        ch.postMessage({
-          type: 'TOGGLE_REMOTE_VIDEO',
-          payload: { patientId: uniquePatientId, videoMuted: nextMuted }
-        });
+        ch.postMessage({ type: 'TOGGLE_REMOTE_VIDEO', payload });
         ch.close();
       } catch (e) {}
     }
@@ -338,35 +373,34 @@ export default function TeleConsultModal({
 
   const toggleAudio = () => {
     if (localStream) {
-      localStream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
-      setAudioMuted(!audioMuted);
+      const nextMuted = !audioMuted;
+      localStream.getAudioTracks().forEach((t) => {
+        t.enabled = !nextMuted;
+      });
+      setAudioMuted(nextMuted);
     }
   };
 
-  // Instant hardware teardown & smooth wrap-up
-  const triggerEndSequence = () => {
+  // Guaranteed 1.2-second transition screen before unmounting
+  const triggerEndSequence = useCallback(() => {
     setCallStatus('ENDING');
     killHardwareMedia();
 
     setTimeout(() => {
       if (onEndCall) onEndCall();
       if (onClose) onClose();
-    }, 600);
-  };
+    }, 1200);
+  }, [killHardwareMedia, onEndCall, onClose]);
 
   const handleUserEndClick = () => {
+    const payload = { patientId: uniquePatientId };
+    if (socket) socket.emit('call_terminated', payload);
+
     try {
       const ch = new BroadcastChannel('swasthya_teleconsult_channel');
-      ch.postMessage({
-        type: 'CALL_TERMINATED',
-        payload: { patientId: uniquePatientId }
-      });
+      ch.postMessage({ type: 'CALL_TERMINATED', payload });
       ch.close();
     } catch (e) {}
-
-    if (socket && uniquePatientId) {
-      socket.emit('call_terminated', { patientId: uniquePatientId });
-    }
 
     triggerEndSequence();
   };
@@ -440,13 +474,13 @@ export default function TeleConsultModal({
 
       {/* Main Content */}
       {callStatus === 'ENDING' ? (
-        <div className="p-8 flex flex-col items-center justify-center text-center space-y-2 bg-slate-900 animate-fadeIn">
-          <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center">
-            <CheckCircle2 className="w-5 h-5" />
+        <div className="p-10 flex flex-col items-center justify-center text-center space-y-3 bg-slate-900 animate-fadeIn min-h-[220px]">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/20 border-2 border-emerald-500/50 text-emerald-400 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+            <CheckCircle2 className="w-6 h-6" />
           </div>
           <div>
-            <h4 className="text-xs font-black text-white">Consultation Completed</h4>
-            <p className="text-[10px] text-slate-400 mt-0.5">Camera & mic released • Syncing desk...</p>
+            <h4 className="text-sm font-black text-white tracking-wide">Consultation Completed</h4>
+            <p className="text-xs text-slate-400 mt-1">Camera & microphone released • Syncing desk...</p>
           </div>
         </div>
       ) : (
@@ -455,7 +489,7 @@ export default function TeleConsultModal({
           <div className="flex-1 space-y-2.5">
             <div className={`grid gap-2.5 ${isMinimized ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2'}`}>
               
-              {/* Local Video Box */}
+              {/* Local Box */}
               <div className={`relative rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center shadow-inner transition-all ${
                 isMinimized ? 'h-28' : 'min-h-[190px]'
               }`}>
@@ -477,7 +511,7 @@ export default function TeleConsultModal({
                 </div>
               </div>
 
-              {/* Remote Video Box */}
+              {/* Remote Box */}
               <div className={`relative rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center p-1.5 shadow-inner transition-all ${
                 isMinimized ? 'h-28' : 'min-h-[190px]'
               }`}>
@@ -493,28 +527,20 @@ export default function TeleConsultModal({
                         </span>
                       </div>
                     ) : (
-                      <>
-                        {remoteStream ? (
-                          <video
-                            ref={remoteVideoRef}
-                            autoPlay
-                            playsInline
-                            className="w-full h-full object-cover rounded-xl"
-                          />
-                        ) : (
-                          <video
-                            ref={(el) => {
-                              if (el && localStream && !el.srcObject) {
-                                el.srcObject = localStream;
-                              }
-                            }}
-                            autoPlay
-                            muted
-                            playsInline
-                            className="w-full h-full object-cover rounded-xl filter brightness-105"
-                          />
-                        )}
-                      </>
+                      <video
+                        ref={(el) => {
+                          if (!el) return;
+                          remoteVideoRef.current = el;
+                          if (remoteStream) {
+                            if (el.srcObject !== remoteStream) el.srcObject = remoteStream;
+                          } else if (localStream) {
+                            if (el.srcObject !== localStream) el.srcObject = localStream;
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        className="w-full h-full object-cover rounded-xl"
+                      />
                     )}
 
                     {!remoteVideoMuted && (
@@ -529,7 +555,7 @@ export default function TeleConsultModal({
                     <div className="w-8 h-8 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
                       <Radio className="w-4 h-4 animate-pulse" />
                     </div>
-                    <p className="text-[11px] font-bold text-white">Connecting...</p>
+                    <p className="text-[11px] font-bold text-white">Connecting consultation...</p>
                   </div>
                 ) : callStatus === 'BUSY_REJECTED' ? (
                   <div className="text-center p-2 space-y-1.5">
@@ -547,7 +573,7 @@ export default function TeleConsultModal({
               </div>
             </div>
 
-            {/* In-Call Controls */}
+            {/* Controls */}
             <div className="flex items-center justify-between pt-0.5">
               <div className="flex items-center gap-1.5">
                 <button
@@ -557,7 +583,7 @@ export default function TeleConsultModal({
                     audioMuted ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-slate-800 text-white'
                   }`}
                 >
-                  {audioMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-teal-400" />}
+                  {audioMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5 text-teal-400" />}
                 </button>
 
                 <button
@@ -567,7 +593,7 @@ export default function TeleConsultModal({
                     videoMuted ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-slate-800 text-white'
                   }`}
                 >
-                  {videoMuted ? <VideoOff className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5 text-teal-400" />}
+                  {videoMuted ? <VideoOff className="w-3.5 h-3.5 text-rose-400" /> : <Video className="w-3.5 h-3.5 text-teal-400" />}
                 </button>
               </div>
 

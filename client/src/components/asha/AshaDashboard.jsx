@@ -76,6 +76,9 @@ export default function AshaDashboard() {
   const [selectedPatientForAbha, setSelectedPatientForAbha] = useState(null);
   const [selectedPatientForTele, setSelectedPatientForTele] = useState(null);
   
+  // Doctor incoming call notification
+  const [doctorIncomingCall, setDoctorIncomingCall] = useState(null);
+
   // Real-time prescription state
   const [selectedRxPatient, setSelectedRxPatient] = useState(null);
   const [selectedRxIndex, setSelectedRxIndex] = useState(0);
@@ -108,7 +111,27 @@ export default function AshaDashboard() {
   const audioPlayerRef = useRef(null);
   const audioStreamRef = useRef(null);
 
-  // Force stop speech recognition and mic streams if Tele-consult is triggered
+  const playDoctorCallChime = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.15);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.18, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.6);
+      }
+    } catch (e) {}
+  };
+
   useEffect(() => {
     if (selectedPatientForTele) {
       if (isListening && stopListening) {
@@ -129,7 +152,6 @@ export default function AshaDashboard() {
     }
   }, [transcript]);
 
-  // Clean all hardware audio streams on unmount
   useEffect(() => {
     return () => {
       if (audioTimerRef.current) clearInterval(audioTimerRef.current);
@@ -256,7 +278,7 @@ export default function AshaDashboard() {
           setAllGlobalPrescriptions(rxList);
         }
       } catch (e) {
-        console.warn('API rx list pending offline sync:', e);
+        console.warn('API rx list sync fallback:', e);
       }
     } catch (err) {
       console.error('Local DB error:', err);
@@ -267,28 +289,41 @@ export default function AshaDashboard() {
     loadPatientsAndRx();
   }, []);
 
-  // Sync listener to kill active call if doctor terminates session
+  // Doctor incoming call notification
   useEffect(() => {
     let callChannel;
     try {
       callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
       callChannel.onmessage = (event) => {
-        const { type } = event.data || {};
-        if (type === 'CALL_TERMINATED') {
-          setSelectedPatientForTele(null);
+        const { type, payload } = event.data || {};
+        if (type === 'DOCTOR_CALL_INITIATED' && payload?.patientId) {
+          setDoctorIncomingCall(payload);
+          playDoctorCallChime();
+        } else if (type === 'CALL_TERMINATED') {
+          setDoctorIncomingCall(null);
         }
       };
     } catch (e) {}
 
     if (socket) {
+      socket.on('doctor_call_initiated', (data) => {
+        if (data?.patientId) {
+          setDoctorIncomingCall(data);
+          playDoctorCallChime();
+        }
+      });
+
       socket.on('call_terminated', () => {
-        setSelectedPatientForTele(null);
+        setDoctorIncomingCall(null);
       });
     }
 
     return () => {
       if (callChannel) callChannel.close();
-      if (socket) socket.off('call_terminated');
+      if (socket) {
+        socket.off('doctor_call_initiated');
+        socket.off('call_terminated');
+      }
     };
   }, [socket]);
 
@@ -427,7 +462,7 @@ export default function AshaDashboard() {
       village: patient.village || '',
       phone: patient.phone || '',
       abhaId: patient.abhaId || '',
-      isPregnant: !!patient.isPregnant,
+      isPregnant: Boolean(patient.isPregnant),
       gestationalWeeks: patient.gestationalWeeks || '',
       fieldNotes: patient.fieldNotes || '',
       registrationDate: patient.registrationDate || patient.createdAt?.split('T')[0] || new Date().toISOString().split('T')[0]
@@ -438,13 +473,19 @@ export default function AshaDashboard() {
 
   const handleRegisterOrEditSubmit = async (e) => {
     e.preventDefault();
+
+    const isFem = formData.gender === 'Female';
+    const finalIsPregnant = isFem ? Boolean(formData.isPregnant) : false;
+    const finalWeeks = (isFem && finalIsPregnant && formData.gestationalWeeks) ? Number(formData.gestationalWeeks) : null;
+
     if (editingPatient) {
       const pid = editingPatient._id || editingPatient.id;
       const updatedCitizen = {
         ...editingPatient,
         ...formData,
         age: Number(formData.age),
-        gestationalWeeks: formData.isPregnant ? Number(formData.gestationalWeeks) : null,
+        isPregnant: finalIsPregnant,
+        gestationalWeeks: finalWeeks,
         registrationAudioNote: regAudioBase64,
         synced: true
       };
@@ -474,9 +515,10 @@ export default function AshaDashboard() {
         _id: tempId,
         ...formData,
         age: Number(formData.age),
-        gestationalWeeks: formData.isPregnant ? Number(formData.gestationalWeeks) : null,
+        isPregnant: finalIsPregnant,
+        gestationalWeeks: finalWeeks,
         registrationAudioNote: regAudioBase64,
-        severity: 'LOW_GREEN',
+        severity: finalIsPregnant ? 'MODERATE_YELLOW' : 'LOW_GREEN',
         lastTriage: null,
         prescription: null,
         prescriptionHistory: [],
@@ -606,7 +648,63 @@ export default function AshaDashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-7 space-y-6 font-sans">
       
-      {/* Real-time Notification Banner from Doctor */}
+      {/* DOCTOR CALLING ASHA INCOMING BANNER */}
+      {doctorIncomingCall && !selectedPatientForTele && (
+        <div className="p-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-3xl shadow-2xl border-2 border-emerald-300 flex items-center justify-between gap-4 animate-bounce">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-white text-teal-700 flex items-center justify-center shrink-0 shadow-md">
+              <Video className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-wider text-emerald-100">
+                {lang === 'hi' ? 'चिकित्सा अधिकारी द्वारा वीडियो परामर्श कॉल' : 'Doctor Initiated Tele-Consultation'}
+              </p>
+              <p className="text-sm font-black text-white">
+                {doctorIncomingCall.doctorName || 'Doctor'} {lang === 'hi' ? 'ने' : 'is calling for'}{' '}
+                <span className="underline decoration-white decoration-2">{doctorIncomingCall.patientName}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                const matched = patients.find(p => String(p._id || p.id).trim() === String(doctorIncomingCall.patientId).trim()) || {
+                  _id: doctorIncomingCall.patientId,
+                  id: doctorIncomingCall.patientId,
+                  name: doctorIncomingCall.patientName
+                };
+                setSelectedPatientForTele(matched);
+                setDoctorIncomingCall(null);
+              }}
+              className="px-4 py-2 bg-white hover:bg-emerald-50 text-teal-900 rounded-xl text-xs font-black flex items-center gap-1.5 shadow transition-all active:scale-95 cursor-pointer"
+            >
+              <Video className="w-3.5 h-3.5 text-teal-700" />
+              <span>{lang === 'hi' ? 'कॉल स्वीकारें' : 'Accept Call'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  const ch = new BroadcastChannel('swasthya_teleconsult_channel');
+                  ch.postMessage({ type: 'CALL_TERMINATED', payload: { patientId: doctorIncomingCall.patientId } });
+                  ch.close();
+                } catch (e) {}
+                if (socket) socket.emit('call_terminated', { patientId: doctorIncomingCall.patientId });
+                setDoctorIncomingCall(null);
+              }}
+              className="px-3 py-2 bg-teal-900/40 hover:bg-teal-900/60 text-white border border-white/20 rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>{lang === 'hi' ? 'अस्वीकार' : 'Decline'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Real-time Notification Banner from Doctor for Signed Prescription */}
       {liveRxAlert && (
         <div className="p-4 bg-gradient-to-r from-emerald-950 via-slate-900 to-emerald-950 border-2 border-emerald-400 text-white rounded-3xl shadow-2xl flex items-center justify-between gap-4 animate-bounce">
           <div className="flex items-center gap-3.5">
@@ -754,7 +852,7 @@ export default function AshaDashboard() {
         </div>
       </div>
 
-      {/* Search & Segmented Filter Bar */}
+      {/* Search & Filter Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative flex-1 w-full">
           <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
@@ -878,7 +976,7 @@ export default function AshaDashboard() {
                   {patient.isPregnant && (
                     <div className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-pink-50 border border-pink-200 text-pink-700 text-[10px] font-bold">
                       <Baby className="w-3 h-3 text-pink-600" />
-                      <span>{lang === 'hi' ? (t?.maternalBadge || 'गर्भवती / ANC') : 'ANC High-Risk'} ({patient.gestationalWeeks}w)</span>
+                      <span>{lang === 'hi' ? (t?.maternalBadge || 'गर्भवती / ANC') : 'ANC High-Risk'} ({patient.gestationalWeeks || '12'}w)</span>
                     </div>
                   )}
 
@@ -1068,7 +1166,7 @@ export default function AshaDashboard() {
         )}
       </div>
 
-      {/* Register Modal */}
+      {/* REGISTER / EDIT CITIZEN MODAL (RESTORED WITH PREGNANCY & GESTATIONAL WEEKS) */}
       {isRegisterOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
@@ -1131,7 +1229,15 @@ export default function AshaDashboard() {
                   </label>
                   <select
                     value={formData.gender}
-                    onChange={(e) => setFormData({ ...formData, gender: e.target.value })}
+                    onChange={(e) => {
+                      const newG = e.target.value;
+                      setFormData({ 
+                        ...formData, 
+                        gender: newG,
+                        isPregnant: newG === 'Female' ? formData.isPregnant : false,
+                        gestationalWeeks: newG === 'Female' ? formData.gestationalWeeks : ''
+                      });
+                    }}
                     className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600 font-medium bg-white"
                   >
                     <option value="Female">{lang === 'hi' ? 'महिला (Female)' : 'Female'}</option>
@@ -1153,6 +1259,57 @@ export default function AshaDashboard() {
                   />
                 </div>
               </div>
+
+              {/* RESTORED MATERNAL / PREGNANCY & ANC BLOCK */}
+              {formData.gender === 'Female' && (
+                <div className="p-3.5 bg-pink-50/70 border border-pink-200 rounded-2xl space-y-2.5 transition-all">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={formData.isPregnant}
+                        onChange={(e) => setFormData({ ...formData, isPregnant: e.target.checked })}
+                        className="w-4 h-4 text-pink-600 rounded border-pink-300 focus:ring-pink-500 accent-pink-600 cursor-pointer"
+                      />
+                      <span className="text-xs font-black text-pink-900 flex items-center gap-1.5">
+                        <Baby className="w-4 h-4 text-pink-600" />
+                        {lang === 'hi' ? 'गर्भवती महिला (Antenatal Care - ANC)' : 'Currently Pregnant / ANC Case'}
+                      </span>
+                    </label>
+
+                    {formData.isPregnant && (
+                      <span className="text-[10px] font-bold text-pink-700 bg-pink-100 px-2 py-0.5 rounded-full border border-pink-200">
+                        {lang === 'hi' ? 'उच्च प्राथमिकता' : 'High Priority'}
+                      </span>
+                    )}
+                  </div>
+
+                  {formData.isPregnant && (
+                    <div className="pt-2 border-t border-pink-200/60 grid grid-cols-2 gap-3 animate-fadeIn">
+                      <div>
+                        <label className="block text-[11px] font-bold text-pink-900 mb-1">
+                          {lang === 'hi' ? 'गर्भधारण अवधि (सप्ताह)' : 'Gestational Age (Weeks)'}
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="42"
+                          required={formData.isPregnant}
+                          value={formData.gestationalWeeks}
+                          onChange={(e) => setFormData({ ...formData, gestationalWeeks: e.target.value })}
+                          className="w-full px-3 py-1.5 text-xs rounded-xl border border-pink-300 bg-white focus:outline-none focus:ring-2 focus:ring-pink-500 font-bold text-pink-950"
+                          placeholder="e.g. 15"
+                        />
+                      </div>
+                      <div className="flex items-center text-[10px] text-pink-800 font-medium leading-tight">
+                        {lang === 'hi' 
+                          ? 'डॉक्टर को प्रेगनेंसी इंडिकेटर और सेफ मेडिसिन वार्निंग दिखेगी।' 
+                          : 'Flags contraindications (ACE/ARBs/NSAIDs) on Doctor Desk.'}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -1331,7 +1488,7 @@ export default function AshaDashboard() {
         </div>
       )}
 
-      {/* Prescription Viewer */}
+      {/* Prescription Modal */}
       {selectedRxPatient && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">

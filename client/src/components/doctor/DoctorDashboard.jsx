@@ -33,6 +33,7 @@ import {
   Pause,
   Volume2,
   Mic,
+  Square,
   History,
   Calendar,
   X,
@@ -40,14 +41,11 @@ import {
   Pill,
   Edit3,
   PhoneCall,
-  PhoneOff,
   User,
   ShieldCheck,
-  Thermometer,
-  Heart
+  Baby
 } from 'lucide-react';
 
-/* --- Clinical Safety Rules --- */
 const SAFETY_RULES = [
   {
     id: 'ace-pregnancy',
@@ -75,7 +73,6 @@ const SAFETY_RULES = [
   }
 ];
 
-/* --- Master Presets --- */
 const MASTER_PRESETS = [
   {
     id: 'htn-essential',
@@ -92,7 +89,7 @@ const MASTER_PRESETS = [
     name: 'Pregnancy HTN (High Risk)',
     gender: 'FEMALE',
     requiresPregnant: true,
-    trigger: (p, vitals) => p.isPregnant && vitals.some(v => v.id === 'bp' && v.level !== 'GREEN'),
+    trigger: (p, vitals) => Boolean(p.isPregnant) && vitals.some(v => v.id === 'bp' && v.level !== 'GREEN'),
     diagnosis: 'Pre-eclampsia risk / Gestational Hypertension',
     medicines: 'Tab Labetalol 100mg BD x 7 days, Tab Calcium 500mg OD',
     advice: 'Immediate referral to District Hospital if BP > 150/100. Strict bed rest.'
@@ -102,7 +99,7 @@ const MASTER_PRESETS = [
     name: 'ANC Prophylaxis',
     gender: 'FEMALE',
     requiresPregnant: true,
-    trigger: (p) => p.isPregnant,
+    trigger: (p) => Boolean(p.isPregnant),
     diagnosis: 'Antenatal Routine Prophylaxis & Nutritional Care',
     medicines: 'Tab IFA 1 OD after food, Tab Calcium 500mg OD',
     advice: 'High protein diet. Next ANC checkup at Sub-Centre in 4 weeks.'
@@ -171,7 +168,6 @@ export default function DoctorDashboard() {
   const [loading, setLoading] = useState(true);
   const [showFieldNotes, setShowFieldNotes] = useState(true);
 
-  // Incoming Call State
   const [incomingCallData, setIncomingCallData] = useState(null);
 
   const [editingRxId, setEditingRxId] = useState(null);
@@ -181,7 +177,12 @@ export default function DoctorDashboard() {
   const [appliedPresetIds, setAppliedPresetIds] = useState([]);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
-  // Audio Playback
+  // Field Voice Dictation
+  const [activeDictationField, setActiveDictationField] = useState(null);
+  const isRecordingIntentRef = useRef(false);
+  const recognitionInstanceRef = useRef(null);
+  const collectedTextRef = useRef('');
+
   const [playingRegAudio, setPlayingRegAudio] = useState(false);
   const [playingTriageAudio, setPlayingTriageAudio] = useState(false);
   const regAudioPlayerRef = useRef(null);
@@ -211,6 +212,109 @@ export default function DoctorDashboard() {
     const raw = user?.name || 'Dr. Arvind Sharma (MO)';
     return raw.replace(/(\s*\(MO\))+/gi, '') + ' (MO)';
   }, [user?.name]);
+
+  // Voice Dictation Toggle
+  const toggleVoiceDictation = (fieldKey, e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('Speech Recognition is not supported on this browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    if (activeDictationField === fieldKey) {
+      isRecordingIntentRef.current = false;
+      if (recognitionInstanceRef.current) {
+        try { recognitionInstanceRef.current.stop(); } catch (err) {}
+      }
+
+      const spoken = (collectedTextRef.current || '').trim();
+      if (spoken) {
+        setPrescription((prev) => {
+          const oldText = (prev[fieldKey] || '').trim();
+          if (!oldText) {
+            return { ...prev, [fieldKey]: spoken };
+          }
+          return {
+            ...prev,
+            [fieldKey]: `${oldText}\n${spoken}`
+          };
+        });
+      }
+
+      collectedTextRef.current = '';
+      setActiveDictationField(null);
+      recognitionInstanceRef.current = null;
+      return;
+    }
+
+    if (recognitionInstanceRef.current) {
+      isRecordingIntentRef.current = false;
+      try { recognitionInstanceRef.current.stop(); } catch (err) {}
+      recognitionInstanceRef.current = null;
+    }
+
+    collectedTextRef.current = '';
+    isRecordingIntentRef.current = true;
+    setActiveDictationField(fieldKey);
+
+    const initRecognition = () => {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-IN';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            collectedTextRef.current += (collectedTextRef.current ? ' ' : '') + event.results[i][0].transcript.trim();
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'not-allowed') {
+          alert('Microphone permission blocked hai! Address bar se mic allow karein.');
+          isRecordingIntentRef.current = false;
+          setActiveDictationField(null);
+        }
+      };
+
+      recognition.onend = () => {
+        if (isRecordingIntentRef.current) {
+          try {
+            recognition.start();
+          } catch (err) {
+            setTimeout(() => {
+              if (isRecordingIntentRef.current) initRecognition();
+            }, 100);
+          }
+        }
+      };
+
+      recognitionInstanceRef.current = recognition;
+      try {
+        recognition.start();
+      } catch (err) {
+        console.warn('Recognition start exception:', err);
+      }
+    };
+
+    initRecognition();
+  };
+
+  useEffect(() => {
+    return () => {
+      isRecordingIntentRef.current = false;
+      if (recognitionInstanceRef.current) {
+        try { recognitionInstanceRef.current.stop(); } catch (e) {}
+      }
+    };
+  }, []);
 
   // Vitals Scanner
   const activeAlertVitals = useMemo(() => {
@@ -441,12 +545,30 @@ export default function DoctorDashboard() {
     });
   };
 
+  // Toggle Selection for Live Queue Patient
   const handleSelectPatient = (patient) => {
-    const pid = patient._id || patient.id;
+    const pid = String(patient?._id || patient?.id || '').trim();
+    const currentPid = String(selectedCase?._id || selectedCase?.id || '').trim();
+
     if (regAudioPlayerRef.current) regAudioPlayerRef.current.pause();
     if (triageAudioPlayerRef.current) triageAudioPlayerRef.current.pause();
     setPlayingRegAudio(false);
     setPlayingTriageAudio(false);
+
+    if (recognitionInstanceRef.current) {
+      isRecordingIntentRef.current = false;
+      try { recognitionInstanceRef.current.stop(); } catch (e) {}
+    }
+    setActiveDictationField(null);
+
+    // Toggle Deselect
+    if (currentPid && pid === currentPid && !editingRxId) {
+      setSelectedCase(null);
+      setEditingRxId(null);
+      setPrescription({ diagnosis: '', medicines: '', advice: '' });
+      setAppliedPresetIds([]);
+      return;
+    }
 
     setEditingRxId(null);
     setSelectedCase({ ...patient, hasNewUpdate: false });
@@ -464,11 +586,30 @@ export default function DoctorDashboard() {
     );
   };
 
+  // Toggle Selection for Signed Patient Card
   const handleOpenSignedPatient = (signedEntry) => {
+    const entryKey = String(signedEntry.patientKey || '').trim();
+    const currentPid = String(selectedCase?._id || selectedCase?.id || '').trim();
+
     if (regAudioPlayerRef.current) regAudioPlayerRef.current.pause();
     if (triageAudioPlayerRef.current) triageAudioPlayerRef.current.pause();
     setPlayingRegAudio(false);
     setPlayingTriageAudio(false);
+
+    if (recognitionInstanceRef.current) {
+      isRecordingIntentRef.current = false;
+      try { recognitionInstanceRef.current.stop(); } catch (e) {}
+    }
+    setActiveDictationField(null);
+
+    // Toggle Deselect
+    if (currentPid && entryKey === currentPid) {
+      setSelectedCase(null);
+      setEditingRxId(null);
+      setPrescription({ diagnosis: '', medicines: '', advice: '' });
+      setAppliedPresetIds([]);
+      return;
+    }
 
     const rx = signedEntry.latestRx;
     const rxPid = String(rx.patientId || '');
@@ -529,7 +670,20 @@ export default function DoctorDashboard() {
       .map((rule) => ({ id: rule.id, message: rule.message(selectedCase) }));
   }, [selectedCase, prescription.medicines]);
 
-  // Load Priority Queue
+  // Priority Queue Filter Rule
+  const shouldBeInDoctorQueue = (p) => {
+    if (!p) return false;
+    const sev = String(p.severity || p.lastTriage?.severity || '').toUpperCase();
+    return (
+      sev.includes('RED') || 
+      sev.includes('YELLOW') || 
+      Boolean(p.isPregnant) || 
+      p.status === 'QUEUED_FOR_TELEOPD' || 
+      Boolean(p.teleConsultRequested)
+    );
+  };
+
+  // Load Initial Doctor Data
   const loadDoctorData = async () => {
     setLoading(true);
     try {
@@ -540,24 +694,13 @@ export default function DoctorDashboard() {
 
       setAllPatientsList(patients || []);
 
-      const waiting = (patients || []).filter((p) => {
-        const sev = String(p.severity || '').toUpperCase();
-        return (
-          sev.includes('RED') || 
-          sev.includes('YELLOW') || 
-          p.status === 'QUEUED_FOR_TELEOPD' || 
-          p.teleConsultRequested
-        );
-      });
-
+      const waiting = (patients || []).filter(shouldBeInDoctorQueue);
       setActiveQueue(waiting);
+
       setSelectedCase((prev) => {
-        if (!prev && waiting.length > 0) return waiting[0];
-        if (prev) {
-          const found = waiting.find((p) => (p._id || p.id) === (prev._id || prev.id));
-          return found || waiting[0] || null;
-        }
-        return null;
+        if (!prev) return null;
+        const found = waiting.find((p) => (p._id || p.id) === (prev._id || prev.id));
+        return found || prev;
       });
 
       const initialRx = rxList || [];
@@ -578,7 +721,73 @@ export default function DoctorDashboard() {
     loadDoctorData();
   }, []);
 
-  // Strict Unique Identifier Match ONLY
+  // ZERO-REFRESH REAL-TIME LISTENER: Socket + BroadcastChannel for ASHA Triage & Registration
+  useEffect(() => {
+    const handleIncomingPatientUpdate = (updatedPatient) => {
+      if (!updatedPatient) return;
+      const pid = String(updatedPatient._id || updatedPatient.id || '').trim();
+      if (!pid) return;
+
+      playSoftChime();
+
+      setAllPatientsList((prev) => {
+        const exists = prev.some(p => String(p._id || p.id).trim() === pid);
+        if (exists) {
+          return prev.map(p => String(p._id || p.id).trim() === pid ? { ...p, ...updatedPatient } : p);
+        }
+        return [updatedPatient, ...prev];
+      });
+
+      setActiveQueue((prev) => {
+        const qualifies = shouldBeInDoctorQueue(updatedPatient);
+        const filtered = prev.filter(p => String(p._id || p.id).trim() !== pid);
+
+        if (qualifies) {
+          return [{ ...updatedPatient, hasNewUpdate: true }, ...filtered];
+        }
+        return filtered;
+      });
+
+      setSelectedCase((prev) => {
+        if (prev && String(prev._id || prev.id).trim() === pid) {
+          return { ...prev, ...updatedPatient };
+        }
+        return prev;
+      });
+    };
+
+    const handleIncomingPatientDelete = (deletedId) => {
+      const dId = String(deletedId).trim();
+      setAllPatientsList(prev => prev.filter(p => String(p._id || p.id).trim() !== dId));
+      setActiveQueue(prev => prev.filter(p => String(p._id || p.id).trim() !== dId));
+      setSelectedCase(prev => (prev && String(prev._id || prev.id).trim() === dId ? null : prev));
+    };
+
+    let teleChannel;
+    try {
+      teleChannel = new BroadcastChannel('swasthya_teleopd_channel');
+      teleChannel.onmessage = (event) => {
+        const { type, payload } = event.data || {};
+        if (type === 'PATIENT_TRIAGE_UPDATED' || type === 'PATIENT_REGISTERED') {
+          handleIncomingPatientUpdate(payload);
+        }
+      };
+    } catch (e) {}
+
+    if (socket) {
+      socket.on('patient_queue_updated', handleIncomingPatientUpdate);
+      socket.on('patient_deleted', handleIncomingPatientDelete);
+    }
+
+    return () => {
+      if (teleChannel) teleChannel.close();
+      if (socket) {
+        socket.off('patient_queue_updated', handleIncomingPatientUpdate);
+        socket.off('patient_deleted', handleIncomingPatientDelete);
+      }
+    };
+  }, [socket]);
+
   const isMatchIncomingCall = (item) => {
     if (!incomingCallData?.patientId || !item || showVideoModal) return false;
     const incomingId = String(incomingCallData.patientId).trim();
@@ -586,7 +795,7 @@ export default function DoctorDashboard() {
     return Boolean(incomingId && currentItemId && incomingId === currentItemId);
   };
 
-  // Listen to incoming Tele-Consult Call requests via BroadcastChannel & WebSockets
+  // Incoming Call Signals
   useEffect(() => {
     let callChannel;
     try {
@@ -604,9 +813,7 @@ export default function DoctorDashboard() {
           );
           if (match) setSelectedCase(match);
         } else if (type === 'CALL_TERMINATED') {
-          // Instant dismiss incoming strip & close active video modal
           setIncomingCallData(null);
-          setShowVideoModal(false);
         }
       };
     } catch (e) {}
@@ -621,7 +828,6 @@ export default function DoctorDashboard() {
 
       socket.on('call_terminated', () => {
         setIncomingCallData(null);
-        setShowVideoModal(false);
       });
     }
 
@@ -634,7 +840,6 @@ export default function DoctorDashboard() {
     };
   }, [socket, allPatientsList, showVideoModal]);
 
-  // Connect Handler: Instantly clears incoming alert and opens call
   const handleDoctorAcceptCall = (targetPatient) => {
     const targetId = String(
       targetPatient?._id || 
@@ -658,7 +863,6 @@ export default function DoctorDashboard() {
       };
 
     setSelectedCase(patientObj);
-    // Instant dismiss so yellow strip never stays
     setIncomingCallData(null);
     setShowVideoModal(true);
 
@@ -676,7 +880,6 @@ export default function DoctorDashboard() {
     }
   };
 
-  // Reject Handler: Instantly clears incoming alert
   const handleDoctorRejectCall = (targetPatient, e) => {
     if (e) e.stopPropagation();
     const targetId = String(targetPatient?._id || targetPatient?.id || targetPatient?.patientId || incomingCallData?.patientId).trim();
@@ -700,11 +903,9 @@ export default function DoctorDashboard() {
       });
     }
 
-    // Clear alert instantly
     setIncomingCallData(null);
   };
 
-  // Submit Prescription
   const handleCompleteConsult = async (e) => {
     e.preventDefault();
     if (!selectedCase) return;
@@ -772,7 +973,7 @@ export default function DoctorDashboard() {
       setEditingRxId(null);
       const remaining = activeQueue.filter((p) => (p._id || p.id) !== pid);
       setActiveQueue(remaining);
-      setSelectedCase(remaining[0] || null);
+      setSelectedCase(null);
     } catch (err) {
       console.error(err);
     } finally {
@@ -833,7 +1034,7 @@ export default function DoctorDashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 font-sans">
       
-      {/* GLOBAL INCOMING TELE-CALL FLOATING BANNER (Sirf tab dikhega jab modal khula na ho) */}
+      {/* FLOATING INCOMING NOTIFICATION BANNER */}
       {incomingCallData && !showVideoModal && (
         <div className="mb-6 p-4 rounded-3xl bg-amber-500 text-slate-950 border-2 border-amber-300 shadow-2xl flex items-center justify-between gap-4 animate-fadeIn">
           <div className="flex items-center gap-3">
@@ -891,7 +1092,7 @@ export default function DoctorDashboard() {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-600' : ''}`} /> Refresh Queue
           </button>
           <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 text-emerald-700 text-xs font-bold border border-emerald-200">
-            <Radio className="w-3.5 h-3.5 text-emerald-500 animate-pulse" /> Live Sync
+            <Radio className="w-3.5 h-3.5 text-emerald-500 animate-pulse" /> Live Sync Active
           </span>
         </div>
       </div>
@@ -920,6 +1121,8 @@ export default function DoctorDashboard() {
                   const pid = item._id || item.id;
                   const isSelected = (selectedCase?._id || selectedCase?.id) === pid && !editingRxId;
                   const isCalling = isMatchIncomingCall(item);
+                  const itemIsPregnant = Boolean(item.isPregnant || item.gestationalWeeks);
+                  const hasVoice = Boolean(item.registrationAudioNote || item.triageAudioNote || item.lastTriage?.triageAudioNote);
 
                   return (
                     <div
@@ -928,14 +1131,14 @@ export default function DoctorDashboard() {
                         isCalling
                           ? 'border-amber-400 bg-amber-50/70 ring-2 ring-amber-400/40'
                           : isSelected
-                          ? 'border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-500/20'
+                          ? 'border-emerald-600 bg-emerald-50/60 ring-2 ring-emerald-500/20 shadow-sm'
                           : 'border-slate-200 bg-slate-50/50 hover:bg-slate-100/70'
                       }`}
                     >
                       <div className="flex justify-between items-start">
-                        <div onClick={() => handleSelectPatient(item)} className="cursor-pointer flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-sm font-bold text-slate-900">{item.name}</h4>
+                        <div onClick={() => handleSelectPatient(item)} className="cursor-pointer flex-1 space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-black text-slate-900">{item.name}</h4>
                             {item.hasNewUpdate && (
                               <span className="relative flex h-2.5 w-2.5">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -943,12 +1146,39 @@ export default function DoctorDashboard() {
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-500">{item.age}y, {item.gender} • {item.village}</p>
-                          <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mt-1 ${
-                            item.severity?.includes('RED') ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
-                          }`}>
-                            {item.severity?.replace('_', ' ') || 'QUEUED'}
-                          </span>
+                          
+                          <p className="text-xs text-slate-500 font-medium">
+                            {item.age}y, {item.gender} • {item.village || 'Field Sub-Center'}
+                          </p>
+
+                          {/* BADGES ON QUEUE CARD */}
+                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                            <span className={`inline-block text-[9px] font-black px-2 py-0.5 rounded-md ${
+                              item.severity?.includes('RED') ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {item.severity?.replace('_', ' ') || 'QUEUED'}
+                            </span>
+
+                            {itemIsPregnant && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-pink-100 text-pink-800 text-[9px] font-black border border-pink-200">
+                                <Baby className="w-2.5 h-2.5 text-pink-600" />
+                                <span>ANC ({item.gestationalWeeks || '12'}w)</span>
+                              </span>
+                            )}
+
+                            {hasVoice && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-teal-100 text-teal-800 text-[9px] font-bold">
+                                <Volume2 className="w-2.5 h-2.5 text-teal-600" />
+                                <span>Voice</span>
+                              </span>
+                            )}
+                          </div>
+
+                          {(item.fieldNotes || item.lastTriage?.notes) && (
+                            <p className="text-[10px] text-slate-500 italic line-clamp-1 pt-0.5">
+                              "{item.fieldNotes || item.lastTriage?.notes}"
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-1">
@@ -961,7 +1191,7 @@ export default function DoctorDashboard() {
                         </div>
                       </div>
 
-                      {/* INCOMING CALL STRIP ON QUEUE CARD */}
+                      {/* CALL STRIP */}
                       {isCalling && (
                         <div className="mt-3 p-2.5 rounded-xl bg-white border border-amber-300 flex items-center justify-between gap-2 animate-fadeIn shadow-xs">
                           <div className="flex items-center gap-1.5">
@@ -987,7 +1217,6 @@ export default function DoctorDashboard() {
                               type="button"
                               onClick={(e) => handleDoctorRejectCall(item, e)}
                               className="px-2 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-[10px] font-black flex items-center gap-1 cursor-pointer transition-all active:scale-95"
-                              title="Doctor is busy attending OPD queue"
                             >
                               <X className="w-3 h-3" /> Busy
                             </button>
@@ -1008,10 +1237,10 @@ export default function DoctorDashboard() {
                 <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Signed Patients ({uniqueSignedPatients.length})
                 </h3>
-                <span className="text-[9px] text-slate-400 font-bold">Tap to view</span>
+                <span className="text-[9px] text-slate-400 font-bold">Tap to toggle</span>
               </div>
 
-              <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+              <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1.5 [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent]">
                 {uniqueSignedPatients.map((entry) => {
                   const isSelected = selectedCase && 
                     String(selectedCase._id || selectedCase.id || '').trim() === entry.patientKey;
@@ -1055,7 +1284,6 @@ export default function DoctorDashboard() {
                         </button>
                       </div>
 
-                      {/* INCOMING CALL STRIP ON SIGNED CARD */}
                       {isCalling && (
                         <div className="p-2 rounded-xl bg-white border border-amber-300 flex items-center justify-between gap-2 shadow-xs animate-fadeIn">
                           <span className="text-[10px] font-black text-amber-900 flex items-center gap-1">
@@ -1093,25 +1321,29 @@ export default function DoctorDashboard() {
         {/* Right Side: Consultation Workspace */}
         <div className="lg:col-span-8 space-y-6">
           {selectedCase ? (
-            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6">
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6 animate-fadeIn">
               
-              {/* Header Info */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-bold text-slate-900">{selectedCase.name}</h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-xl font-black text-slate-900">{selectedCase.name}</h2>
+                    
+                    {/* MATERNAL ANC PREGNANCY BADGE */}
                     {isPregnant && (
-                      <span className="px-2.5 py-0.5 rounded-full bg-pink-100 border border-pink-300 text-pink-700 text-xs font-black">
-                        PREGNANT ({selectedCase.gestationalWeeks || '15'}w)
+                      <span className="px-3 py-1 rounded-full bg-pink-100 border-2 border-pink-300 text-pink-900 text-xs font-black flex items-center gap-1.5 shadow-2xs">
+                        <Baby className="w-3.5 h-3.5 text-pink-600" />
+                        PREGNANT / ANC HIGH-RISK ({selectedCase.gestationalWeeks || '15'}w)
                       </span>
                     )}
+
                     {editingRxId && (
                       <span className="px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800 text-[10px] font-black flex items-center gap-1">
                         <Edit3 className="w-3 h-3" /> EDITING SIGNED RECORD
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+
+                  <div className="text-xs text-slate-500 mt-1.5 flex items-center gap-2 flex-wrap">
                     <span>Age: <strong className="text-slate-700">{selectedCase.age}y</strong></span>
                     <span>•</span>
                     <span>Gender: <strong className="text-slate-700">{selectedCase.gender}</strong></span>
@@ -1123,11 +1355,12 @@ export default function DoctorDashboard() {
                       Phone: <strong className="text-slate-800">{resolvedPhone}</strong>
                     </span>
 
+                    {/* REGISTRATION AUDIO NOTE PLAYER */}
                     {resolvedRegistrationAudio && (
                       <>
                         <span>•</span>
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 border border-teal-200 rounded-lg text-teal-800">
-                          <Volume2 className="w-3 h-3 text-teal-600" />
+                          <Volume2 className="w-3.5 h-3.5 text-teal-600" />
                           <span className="text-[10px] font-bold">Reg. Voice:</span>
                           <button
                             type="button"
@@ -1148,7 +1381,6 @@ export default function DoctorDashboard() {
                   </div>
                 </div>
 
-                {/* Actions */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
@@ -1169,7 +1401,30 @@ export default function DoctorDashboard() {
                   
                   <button
                     type="button"
-                    onClick={() => setShowVideoModal(true)}
+                    onClick={() => {
+                      const pid = String(selectedCase?._id || selectedCase?.id || '').trim();
+                      
+                      const callPayload = {
+                        patientId: pid,
+                        patientName: selectedCase?.name || 'Citizen',
+                        doctorName: cleanDoctorName
+                      };
+
+                      try {
+                        const callChannel = new BroadcastChannel('swasthya_teleconsult_channel');
+                        callChannel.postMessage({
+                          type: 'DOCTOR_CALL_INITIATED',
+                          payload: callPayload
+                        });
+                        callChannel.close();
+                      } catch (e) {}
+
+                      if (socket && pid) {
+                        socket.emit('doctor_call_initiated', callPayload);
+                      }
+
+                      setShowVideoModal(true);
+                    }}
                     className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow transition-all cursor-pointer active:scale-95"
                   >
                     <Video className="w-4 h-4" /> Video Call
@@ -1234,7 +1489,7 @@ export default function DoctorDashboard() {
                 </div>
               </div>
 
-              {/* Field Notes & Voice Note */}
+              {/* Field Notes & Voice Notes Section */}
               <div className="border border-slate-200 rounded-2xl overflow-hidden">
                 <button
                   type="button"
@@ -1246,12 +1501,14 @@ export default function DoctorDashboard() {
                   </span>
                   {showFieldNotes ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
                 </button>
+                
                 {showFieldNotes && (
                   <div className="p-3.5 bg-white border-t border-slate-100 space-y-2.5">
                     <div className="text-xs text-slate-700 italic bg-slate-50/70 p-2.5 rounded-xl border border-slate-100">
                       "{resolvedNotes}"
                     </div>
 
+                    {/* FIELD TRIAGE AUDIO PLAYER */}
                     {resolvedTriageAudio ? (
                       <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-xl flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5">
@@ -1327,29 +1584,86 @@ export default function DoctorDashboard() {
                 </div>
               </div>
 
-              {/* Prescription Form */}
-              <form onSubmit={handleCompleteConsult} className="space-y-3.5">
+              {/* Prescription Form with Click-to-Speak Dictation */}
+              <form onSubmit={handleCompleteConsult} className="space-y-4">
+                
+                {/* 1. Clinical Diagnosis */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Clinical Diagnosis</label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700">Clinical Diagnosis</label>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleVoiceDictation('diagnosis', e)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-[10px] font-black transition-all cursor-pointer select-none active:scale-95 ${
+                        activeDictationField === 'diagnosis'
+                          ? 'bg-rose-600 text-white animate-pulse shadow-md shadow-rose-600/30'
+                          : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs'
+                      }`}
+                    >
+                      {activeDictationField === 'diagnosis' ? (
+                        <>
+                          <Square className="w-2.5 h-2.5 fill-current" />
+                          <span>Stop Recording</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-3 h-3 text-teal-600" />
+                          <span>Voice Dictate</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
                     value={prescription.diagnosis}
                     onChange={(e) => setPrescription({ ...prescription, diagnosis: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
-                    placeholder="Enter clinical diagnosis..."
+                    className={`w-full px-3 py-2 text-xs rounded-xl border focus:outline-none font-medium transition-all ${
+                      activeDictationField === 'diagnosis'
+                        ? 'border-rose-400 ring-2 ring-rose-200 bg-rose-50/20'
+                        : 'border-slate-300 focus:ring-2 focus:ring-emerald-600'
+                    }`}
+                    placeholder="Type or click 'Voice Dictate' to speak diagnosis..."
                   />
                 </div>
 
+                {/* 2. Prescribed Medicines */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Prescribed Medicines (Multi-dose list)</label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700">Prescribed Medicines (Multi-dose list)</label>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleVoiceDictation('medicines', e)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-[10px] font-black transition-all cursor-pointer select-none active:scale-95 ${
+                        activeDictationField === 'medicines'
+                          ? 'bg-rose-600 text-white animate-pulse shadow-md shadow-rose-600/30'
+                          : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs'
+                      }`}
+                    >
+                      {activeDictationField === 'medicines' ? (
+                        <>
+                          <Square className="w-2.5 h-2.5 fill-current" />
+                          <span>Stop Recording</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-3 h-3 text-teal-600" />
+                          <span>Voice Dictate</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     rows={3}
                     required
                     value={prescription.medicines}
                     onChange={(e) => setPrescription({ ...prescription, medicines: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 font-mono focus:ring-2 focus:ring-emerald-600 focus:outline-none"
-                    placeholder="Click presets above to add medicines line-by-line..."
+                    className={`w-full px-3 py-2 text-xs rounded-xl border font-mono focus:outline-none transition-all ${
+                      activeDictationField === 'medicines'
+                        ? 'border-rose-400 ring-2 ring-rose-200 bg-rose-50/20'
+                        : 'border-slate-300 focus:ring-2 focus:ring-emerald-600'
+                    }`}
+                    placeholder="Click presets or speak: 'Tab Paracetamol 650mg TDS x 3 days'..."
                   />
 
                   {safetyWarnings.length > 0 && (
@@ -1364,14 +1678,42 @@ export default function DoctorDashboard() {
                   )}
                 </div>
 
+                {/* 3. Advice & Follow-up */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Advice & Follow-up</label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-slate-700">Advice & Follow-up</label>
+                    <button
+                      type="button"
+                      onClick={(e) => toggleVoiceDictation('advice', e)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-[10px] font-black transition-all cursor-pointer select-none active:scale-95 ${
+                        activeDictationField === 'advice'
+                          ? 'bg-rose-600 text-white animate-pulse shadow-md shadow-rose-600/30'
+                          : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs'
+                      }`}
+                    >
+                      {activeDictationField === 'advice' ? (
+                        <>
+                          <Square className="w-2.5 h-2.5 fill-current" />
+                          <span>Stop Recording</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-3 h-3 text-teal-600" />
+                          <span>Voice Dictate</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     rows={2}
                     value={prescription.advice}
                     onChange={(e) => setPrescription({ ...prescription, advice: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-medium"
-                    placeholder="Advice or follow-up instructions..."
+                    className={`w-full px-3 py-2 text-xs rounded-xl border focus:outline-none font-medium transition-all ${
+                      activeDictationField === 'advice'
+                        ? 'border-rose-400 ring-2 ring-rose-200 bg-rose-50/20'
+                        : 'border-slate-300 focus:ring-2 focus:ring-emerald-600'
+                    }`}
+                    placeholder="Speak instructions: 'Drink plenty of water and steam inhalation twice daily'..."
                   />
                 </div>
 
@@ -1406,8 +1748,22 @@ export default function DoctorDashboard() {
               </form>
             </div>
           ) : (
-            <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center text-slate-400 text-xs">
-              Select a patient from the queue or click a signed citizen card from the left panel.
+            <div className="bg-white rounded-3xl border border-slate-200/90 p-12 text-center shadow-xs flex flex-col items-center justify-center min-h-[520px] space-y-4 animate-fadeIn">
+              <div className="w-16 h-16 rounded-3xl bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600 shadow-sm">
+                <Stethoscope className="w-8 h-8 stroke-[1.8]" />
+              </div>
+              <div className="max-w-md space-y-1">
+                <h3 className="text-base font-black text-slate-800 tracking-tight">
+                  No Patient Selected
+                </h3>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Select a case from the <strong>Live Queue</strong> to conduct clinical triage, or click any citizen from <strong>Signed Patients</strong> to review or update their digital prescription.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 pt-2 text-[11px] font-bold text-slate-400">
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span>Workdesk Ready • Live Tele-OPD Standby</span>
+              </div>
             </div>
           )}
         </div>
