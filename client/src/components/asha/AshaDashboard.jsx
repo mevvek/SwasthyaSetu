@@ -7,14 +7,13 @@ import { useSpeechRecognition } from '../../utils/useSpeechRecognition';
 import { 
   deletePatientApi, 
   updatePatientApi, 
-  createPatientApi,
-  fetchPrescriptionsApi
+  createPatientApi, 
+  fetchPrescriptionsApi 
 } from '../../utils/api';
 import { 
   Users, 
   UserPlus, 
   Search, 
-  Filter, 
   Activity, 
   QrCode, 
   Video, 
@@ -25,9 +24,7 @@ import {
   Phone,
   MapPin,
   Mic,
-  MicOff,
   Sparkles,
-  ShieldCheck,
   CheckCircle2,
   FileText,
   Pill,
@@ -36,7 +33,6 @@ import {
   Edit2,
   Trash2,
   Heart,
-  Thermometer,
   Calendar,
   Square,
   Play,
@@ -44,8 +40,7 @@ import {
   Volume2,
   History,
   Clock,
-  Shield,
-  Stethoscope
+  Megaphone
 } from 'lucide-react';
 import TriageAssessmentModal from './TriageAssessmentModal';
 import AbhaCardModal from './AbhaCardModal';
@@ -61,8 +56,8 @@ const formatSafeDate = (rawDate, lang = 'en') => {
 export default function AshaDashboard() {
   const { t = {}, lang = 'en' } = useLanguage() || {};
   const { socket } = useSocket() || {};
-  const { isSyncing, pendingCount = 0 } = useNetworkSync() || {};
-  const { isListening, transcript, startListening, stopListening } = useSpeechRecognition() || {};
+  const { pendingCount = 0 } = useNetworkSync() || {};
+  const { isListening, transcript, stopListening } = useSpeechRecognition() || {};
 
   const [patients, setPatients] = useState([]);
   const [allGlobalPrescriptions, setAllGlobalPrescriptions] = useState([]);
@@ -78,6 +73,20 @@ export default function AshaDashboard() {
   
   // Doctor incoming call notification
   const [doctorIncomingCall, setDoctorIncomingCall] = useState(null);
+
+  // Executive Action 2: Real-time CMO Outbreak Directive States
+  const [activeCmoDirective, setActiveCmoDirective] = useState(null);
+  const [cmoDirectivesList, setCmoDirectivesList] = useState(() => {
+    try {
+      const saved = localStorage.getItem('swasthya_cmo_directives');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [showDirectivesModal, setShowDirectivesModal] = useState(false);
+  const [playingDirectiveAudioId, setPlayingDirectiveAudioId] = useState(null);
+  const cmoAudioPlayerRef = useRef(null);
 
   // Real-time prescription state
   const [selectedRxPatient, setSelectedRxPatient] = useState(null);
@@ -167,6 +176,9 @@ export default function AshaDashboard() {
       }
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
+      }
+      if (cmoAudioPlayerRef.current) {
+        cmoAudioPlayerRef.current.pause();
       }
       if (isListening && stopListening) {
         stopListening();
@@ -264,6 +276,21 @@ export default function AshaDashboard() {
     }
   };
 
+  const togglePlayCmoDirectiveAudio = (directive) => {
+    if (!cmoAudioPlayerRef.current) return;
+    if (playingDirectiveAudioId === directive.id) {
+      cmoAudioPlayerRef.current.pause();
+      setPlayingDirectiveAudioId(null);
+    } else {
+      cmoAudioPlayerRef.current.src = directive.audioNote;
+      cmoAudioPlayerRef.current.play().then(() => {
+        setPlayingDirectiveAudioId(directive.id);
+      }).catch(() => {
+        setPlayingDirectiveAudioId(null);
+      });
+    }
+  };
+
   const loadPatientsAndRx = async () => {
     try {
       if (db?.patients) {
@@ -288,6 +315,61 @@ export default function AshaDashboard() {
   useEffect(() => {
     loadPatientsAndRx();
   }, []);
+
+  // Real-time CMO Directive Listener (Saves to state & localStorage archive)
+  useEffect(() => {
+    const handleCmoDirective = (directive) => {
+      const enrichedDirective = {
+        ...directive,
+        id: directive.id || `dir_${Date.now()}`,
+        receivedAt: new Date().toISOString()
+      };
+
+      setActiveCmoDirective(enrichedDirective);
+      setCmoDirectivesList(prev => {
+        const updated = [enrichedDirective, ...prev.filter(d => d.id !== enrichedDirective.id)];
+        try { localStorage.setItem('swasthya_cmo_directives', JSON.stringify(updated)); } catch (e) {}
+        return updated;
+      });
+
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(650, ctx.currentTime);
+          osc.frequency.setValueAtTime(850, ctx.currentTime + 0.15);
+          gain.gain.setValueAtTime(0.22, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.6);
+        }
+      } catch (e) {}
+    };
+
+    if (socket) {
+      socket.on('outbreak_directive_broadcast', handleCmoDirective);
+    }
+
+    let obChan;
+    try {
+      obChan = new BroadcastChannel('swasthya_outbreak_channel');
+      obChan.onmessage = (event) => {
+        if (event.data?.type === 'OUTBREAK_DIRECTIVE_ISSUED') {
+          handleCmoDirective(event.data.payload);
+        }
+      };
+    } catch (e) {}
+
+    return () => {
+      if (socket) socket.off('outbreak_directive_broadcast', handleCmoDirective);
+      if (obChan) obChan.close();
+    };
+  }, [socket]);
 
   // Doctor incoming call notification
   useEffect(() => {
@@ -643,11 +725,59 @@ export default function AshaDashboard() {
     );
   };
 
-  const activeRx = patientRxHistoryList[selectedRxIndex] || patientRxHistoryList[0] || selectedRxPatient?.prescription || null;
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-7 space-y-6 font-sans">
       
+      {/* Hidden audio element for CMO directives */}
+      <audio
+        ref={cmoAudioPlayerRef}
+        onEnded={() => setPlayingDirectiveAudioId(null)}
+        className="hidden"
+      />
+
+      {/* EXECUTIVE ACTION 2: CMO OUTBREAK DIRECTIVE FLASH BANNER */}
+      {activeCmoDirective && (
+        <div className="p-4 bg-gradient-to-r from-rose-900 via-rose-800 to-rose-900 border-2 border-rose-400 text-white rounded-3xl shadow-2xl flex items-center justify-between gap-4 animate-bounce">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-white text-rose-800 flex items-center justify-center shrink-0 shadow-lg">
+              <Megaphone className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.2 rounded bg-rose-700 text-rose-200 text-[9px] font-mono font-black tracking-wider uppercase border border-rose-500">
+                  {activeCmoDirective.priority === 'HIGH' ? '🚨 Code Red' : '⚠️ Code Amber'}
+                </span>
+                <p className="text-[10px] font-black uppercase tracking-wider text-rose-200">
+                  DISTRICT CMO DIRECTIVE • SECTOR: {activeCmoDirective.village}
+                </p>
+              </div>
+              <p className="text-sm font-black text-white mt-0.5">
+                Protocol: {activeCmoDirective.protocol.replace(/_/g, ' ')} — <span className="font-normal italic text-rose-100">"{activeCmoDirective.notes}"</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {activeCmoDirective.audioNote && (
+              <button
+                type="button"
+                onClick={() => togglePlayCmoDirectiveAudio(activeCmoDirective)}
+                className="px-3 py-2 bg-rose-700 hover:bg-rose-600 text-white border border-rose-400 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow transition-all active:scale-95"
+              >
+                {playingDirectiveAudioId === activeCmoDirective.id ? <Pause className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                <span>{playingDirectiveAudioId === activeCmoDirective.id ? 'Pause Voice' : 'Listen Voice'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setActiveCmoDirective(null)}
+              className="px-4 py-2 bg-white hover:bg-rose-50 text-rose-900 rounded-xl text-xs font-black shadow-md cursor-pointer transition-all active:scale-95"
+            >
+              Acknowledge & Save
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* DOCTOR CALLING ASHA INCOMING BANNER */}
       {doctorIncomingCall && !selectedPatientForTele && (
         <div className="p-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-3xl shadow-2xl border-2 border-emerald-300 flex items-center justify-between gap-4 animate-bounce">
@@ -766,7 +896,20 @@ export default function AshaDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* NEW: CMO ORDERS ARCHIVE BUTTON */}
+            <button
+              type="button"
+              onClick={() => setShowDirectivesModal(true)}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-800 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-2xs"
+            >
+              <Megaphone className="w-4 h-4 text-rose-600" />
+              <span>{lang === 'hi' ? 'सीएमओ आदेश' : 'CMO Orders'}</span>
+              <span className="px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-black">
+                {cmoDirectivesList.length}
+              </span>
+            </button>
+
             {pendingCount > 0 ? (
               <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold animate-pulse">
                 <CloudOff className="w-4 h-4 text-amber-600" />
@@ -1166,7 +1309,107 @@ export default function AshaDashboard() {
         )}
       </div>
 
-      {/* REGISTER / EDIT CITIZEN MODAL (RESTORED WITH PREGNANCY & GESTATIONAL WEEKS) */}
+      {/* CMO DIRECTIVES ARCHIVE MODAL */}
+      {showDirectivesModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="bg-slate-950 p-5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-400 flex items-center justify-center border border-rose-500/30">
+                  <Megaphone className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black tracking-tight">
+                    {lang === 'hi' ? 'सीएमओ प्रशासनिक स्वास्थ्य आदेश' : 'District CMO Directives Archive'}
+                  </h3>
+                  <p className="text-[10px] text-slate-400">
+                    {lang === 'hi' ? 'मुख्य चिकित्सा अधिकारी द्वारा जारी आदेश' : 'Official field instructions from Chief Medical Officer'}
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                  if (cmoAudioPlayerRef.current) cmoAudioPlayerRef.current.pause();
+                  setPlayingDirectiveAudioId(null);
+                  setShowDirectivesModal(false);
+                }}
+                className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3.5 overflow-y-auto flex-1">
+              {cmoDirectivesList.length === 0 ? (
+                <div className="py-16 text-center text-slate-400 text-xs">
+                  {lang === 'hi' ? 'कोई प्रशासनिक आदेश प्राप्त नहीं हुआ है।' : 'No official directives issued by CMO yet.'}
+                </div>
+              ) : (
+                cmoDirectivesList.map((dir, idx) => (
+                  <div 
+                    key={dir.id || idx}
+                    className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition-all space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${
+                          dir.priority === 'HIGH' ? 'bg-rose-100 text-rose-800 border border-rose-200' : 'bg-amber-100 text-amber-800 border border-amber-200'
+                        }`}>
+                          {dir.priority === 'HIGH' ? '🚨 Code Red' : '⚠️ Code Amber'}
+                        </span>
+                        <span className="text-xs font-black text-slate-900">
+                          Sector: {dir.village || 'Field Hub'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono text-slate-400 font-bold flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        {formatSafeDate(dir.receivedAt || dir.timestamp, lang)}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200 text-xs text-slate-800 space-y-1">
+                      <p className="font-bold text-slate-900 text-[11px]">
+                        Protocol: <span className="text-rose-700">{dir.protocol?.replace(/_/g, ' ')}</span>
+                      </p>
+                      <p className="text-slate-600 italic">"{dir.notes}"</p>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1 text-[10px] text-slate-500">
+                      <span>Issued By: <strong>{dir.issuedBy || 'District CMO Command'}</strong></span>
+                      {dir.audioNote && (
+                        <button
+                          type="button"
+                          onClick={() => togglePlayCmoDirectiveAudio(dir)}
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-bold flex items-center gap-1 cursor-pointer transition-all active:scale-95"
+                        >
+                          {playingDirectiveAudioId === dir.id ? <Pause className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current ml-0.5" />}
+                          <span>{playingDirectiveAudioId === dir.id ? 'Pause Voice' : 'Listen Voice Order'}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  if (cmoAudioPlayerRef.current) cmoAudioPlayerRef.current.pause();
+                  setPlayingDirectiveAudioId(null);
+                  setShowDirectivesModal(false);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+              >
+                Close Archive
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REGISTER / EDIT CITIZEN MODAL */}
       {isRegisterOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden">
@@ -1260,7 +1503,6 @@ export default function AshaDashboard() {
                 </div>
               </div>
 
-              {/* RESTORED MATERNAL / PREGNANCY & ANC BLOCK */}
               {formData.gender === 'Female' && (
                 <div className="p-3.5 bg-pink-50/70 border border-pink-200 rounded-2xl space-y-2.5 transition-all">
                   <div className="flex items-center justify-between">
@@ -1548,123 +1790,130 @@ export default function AshaDashboard() {
             )}
 
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
-              {activeRx ? (
-                <>
-                  <div className="border-b-2 border-slate-800 pb-3 flex justify-between items-start">
-                    <div>
-                      <h2 className="text-base font-black text-slate-900 tracking-tight uppercase">
-                        {lang === 'hi' ? 'स्वास्थ्य सेतु चिकित्सा पर्ची' : 'SwasthyaSetu Clinical Slip'}
-                      </h2>
-                      <p className="text-xs text-slate-700 font-bold mt-0.5">
-                        {lang === 'hi' ? 'चिकित्सा अधिकारी:' : 'Medical Officer:'} <span className="text-slate-900">{activeRx.doctorName || 'Dr. Arvind Sharma (MO)'}</span>
-                      </p>
-                      <p className="text-[10px] text-slate-500 font-mono">
-                        MCI Reg: {activeRx.doctorRegNo || 'UP-MCI-84920'} • ABDM Verified
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <span className="px-2.5 py-0.5 bg-emerald-100 border border-emerald-300 text-emerald-800 font-extrabold rounded-md text-[10px] uppercase block mb-1">
-                        ABDM Signed
-                      </span>
-                      <span className="text-[10px] text-slate-500 font-mono font-bold block">
-                        {formatSafeDate(activeRx.timestamp, lang)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                        {lang === 'hi' ? 'मरीज़ का नाम' : 'Citizen Name'}
-                      </span>
-                      <strong className="text-slate-900">{selectedRxPatient.name || activeRx.patientName}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                        {lang === 'hi' ? 'आयु / लिंग' : 'Age / Gender'}
-                      </span>
-                      <span className="font-semibold text-slate-800">
-                        {selectedRxPatient.age || 26} {lang === 'hi' ? 'वर्ष' : 'y'} • {selectedRxPatient.gender === 'Female' ? (lang === 'hi' ? 'महिला' : 'Female') : (lang === 'hi' ? 'पुरुष' : 'Male')}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                        {lang === 'hi' ? 'आभा संख्या' : 'ABHA Number'}
-                      </span>
-                      <span className="font-mono font-bold text-teal-800 text-[11px]">{selectedRxPatient.abhaId || 'Linked'}</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
-                        {lang === 'hi' ? 'गाँव / केंद्र' : 'Village Hub'}
-                      </span>
-                      <span className="font-semibold text-slate-800">{selectedRxPatient.village || 'Field Center'}</span>
-                    </div>
-                  </div>
-
-                  {activeRx.vitalsAtConsult && (
-                    <div className="p-2.5 bg-teal-50/70 border border-teal-200 rounded-xl">
-                      <span className="text-[9px] font-black uppercase text-teal-900 block mb-1">
-                        {lang === 'hi' ? 'परामर्श के समय वाइटल्स:' : 'Clinical Vitals at Consultation:'}
-                      </span>
-                      <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
-                        <div className="bg-white p-1 rounded border border-teal-100">
-                          <span className="text-[8px] text-slate-400 block">BP</span>
-                          <strong>{activeRx.vitalsAtConsult.bp || '120/80'}</strong>
+              {selectedRxPatient.prescription || patientRxHistoryList[selectedRxIndex] ? (
+                (() => {
+                  const activeRx = patientRxHistoryList[selectedRxIndex] || selectedRxPatient.prescription;
+                  return (
+                    <>
+                      <div className="border-b-2 border-slate-800 pb-3 flex justify-between items-start">
+                        <div>
+                          <h2 className="text-base font-black text-slate-900 tracking-tight uppercase">
+                            {lang === 'hi' ? 'स्वास्थ्य सेतु चिकित्सा पर्ची' : 'SwasthyaSetu Clinical Slip'}
+                          </h2>
+                          <p className="text-xs text-slate-700 font-bold mt-0.5">
+                            {lang === 'hi' ? 'चिकित्सा अधिकारी:' : 'Medical Officer:'} <span className="text-slate-900">{activeRx.doctorName || 'Dr. Arvind Sharma (MO)'}</span>
+                          </p>
+                          <p className="text-[10px] text-slate-500 font-mono">
+                            MCI Reg: {activeRx.doctorRegNo || 'UP-MCI-84920'} • ABDM Verified
+                          </p>
                         </div>
-                        <div className="bg-white p-1 rounded border border-teal-100">
-                          <span className="text-[8px] text-slate-400 block">Pulse</span>
-                          <strong>{activeRx.vitalsAtConsult.pulse || 72} bpm</strong>
-                        </div>
-                        <div className="bg-white p-1 rounded border border-teal-100">
-                          <span className="text-[8px] text-slate-400 block">SpO2</span>
-                          <strong>{activeRx.vitalsAtConsult.spo2 || 98}%</strong>
-                        </div>
-                        <div className="bg-white p-1 rounded border border-teal-100">
-                          <span className="text-[8px] text-slate-400 block">Temp</span>
-                          <strong>{activeRx.vitalsAtConsult.temp || 98.6}°F</strong>
+                        <div className="text-right">
+                          <span className="px-2.5 py-0.5 bg-emerald-100 border border-emerald-300 text-emerald-800 font-extrabold rounded-md text-[10px] uppercase block mb-1">
+                            ABDM Signed
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono font-bold block">
+                            {formatSafeDate(activeRx.timestamp, lang)}
+                          </span>
                         </div>
                       </div>
-                    </div>
-                  )}
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      {lang === 'hi' ? 'क्लिनिकल डायग्नोसिस' : 'Clinical Diagnosis'}
-                    </label>
-                    <p className="text-sm font-black text-slate-900 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                      {activeRx.diagnosis || (lang === 'hi' ? 'डायग्नोसिस दर्ज है।' : 'Clinical Diagnosis recorded on file.')}
-                    </p>
-                  </div>
+                      <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            {lang === 'hi' ? 'मरीज़ का नाम' : 'Citizen Name'}
+                          </span>
+                          <strong className="text-slate-900">{selectedRxPatient.name || activeRx.patientName}</strong>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            {lang === 'hi' ? 'आयु / लिंग' : 'Age / Gender'}
+                          </span>
+                          <span className="font-semibold text-slate-800">
+                            {selectedRxPatient.age || 26} {lang === 'hi' ? 'वर्ष' : 'y'} • {selectedRxPatient.gender === 'Female' ? (lang === 'hi' ? 'महिला' : 'Female') : (lang === 'hi' ? 'पुरुष' : 'Male')}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            {lang === 'hi' ? 'आभा संख्या' : 'ABHA Number'}
+                          </span>
+                          <span className="font-mono font-bold text-teal-800 text-[11px]">{selectedRxPatient.abhaId || 'Linked'}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                            {lang === 'hi' ? 'गाँव / केंद्र' : 'Village Hub'}
+                          </span>
+                          <span className="font-semibold text-slate-800">{selectedRxPatient.village || 'Field Center'}</span>
+                        </div>
+                      </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
-                      <Pill className="w-3.5 h-3.5 text-teal-600" />
-                      <span>{lang === 'hi' ? 'दवाएं एवं खुराक (Prescribed Medicines & Dosage)' : 'Prescribed Medicines & Dosage (Rx)'}</span>
-                    </label>
-                    <div className="p-3 bg-white rounded-xl border border-slate-300 font-mono text-xs text-slate-950 font-bold leading-relaxed whitespace-pre-line shadow-2xs">
-                      {activeRx.medicines || (lang === 'hi' ? 'दवाएं फाइल पर दर्ज हैं।' : 'Medicines detailed on file.')}
-                    </div>
-                  </div>
+                      {activeRx.vitalsAtConsult && (
+                        <div className="p-2.5 bg-teal-50/70 border border-teal-200 rounded-xl">
+                          <span className="text-[9px] font-black uppercase text-teal-900 block mb-1">
+                            {lang === 'hi' ? 'परामर्श के समय वाइटल्स:' : 'Clinical Vitals at Consultation:'}
+                          </span>
+                          <div className="grid grid-cols-4 gap-2 text-center font-mono text-xs">
+                            <div className="bg-white p-1 rounded border border-teal-100">
+                              <span className="text-[8px] text-slate-400 block">BP</span>
+                              <strong>{activeRx.vitalsAtConsult.bp || '120/80'}</strong>
+                            </div>
+                            <div className="bg-white p-1 rounded border border-teal-100">
+                              <span className="text-[8px] text-slate-400 block">Pulse</span>
+                              <strong>{activeRx.vitalsAtConsult.pulse || 72} bpm</strong>
+                            </div>
+                            <div className="bg-white p-1 rounded border border-teal-100">
+                              <span className="text-[8px] text-slate-400 block">SpO2</span>
+                              <strong>{activeRx.vitalsAtConsult.spo2 || 98}%</strong>
+                            </div>
+                            <div className="bg-white p-1 rounded border border-teal-100">
+                              <span className="text-[8px] text-slate-400 block">Temp</span>
+                              <strong>{activeRx.vitalsAtConsult.temp || 98.6}°F</strong>
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      {lang === 'hi' ? 'डॉक्टर के निर्देश एवं सलाह' : 'Doctor Directives & Advice'}
-                    </label>
-                    <p className="text-xs text-slate-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed font-semibold">
-                      {activeRx.advice || (lang === 'hi' ? 'नियमित स्वास्थ्य सावधानियों का पालन करें।' : 'Follow routine medical precautions.')}
-                    </p>
-                  </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                          {lang === 'hi' ? 'क्लिनिकल डायग्नोसिस' : 'Clinical Diagnosis'}
+                        </label>
+                        <p className="text-sm font-black text-slate-900 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                          {activeRx.diagnosis || (lang === 'hi' ? 'डायग्नोसिस दर्ज है।' : 'Clinical Diagnosis recorded on file.')}
+                        </p>
+                      </div>
 
-                  <div className="pt-3 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-500">
-                    <span className="flex items-center gap-1 font-semibold text-emerald-700">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      {lang === 'hi' ? 'चिकित्सा अधिकारी द्वारा डिजिटल रूप से हस्ताक्षरित' : 'Authenticated by Medical Officer'}
-                    </span>
-                    <span className="font-mono">
-                      {lang === 'hi' ? 'विजिट' : 'Encounter'} #{patientRxHistoryList.length > 0 ? (patientRxHistoryList.length - selectedRxIndex) : 1}
-                    </span>
-                  </div>
-                </>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                          <Pill className="w-3.5 h-3.5 text-teal-600" />
+                          <span>{lang === 'hi' ? 'दवाएं एवं खुराक (Prescribed Medicines & Dosage)' : 'Prescribed Medicines & Dosage (Rx)'}</span>
+                        </label>
+                        <div className="p-3 bg-white rounded-xl border border-slate-300 font-mono text-xs text-slate-950 font-bold leading-relaxed whitespace-pre-line shadow-2xs">
+                          {activeRx.medicines || (lang === 'hi' ? 'दवाएं फाइल पर दर्ज हैं।' : 'Medicines detailed on file.')}
+                        </div>
+                      </div>
+
+                      {activeRx.advice && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            {lang === 'hi' ? 'डॉक्टर के निर्देश एवं सलाह' : 'Doctor Directives & Advice'}
+                          </label>
+                          <p className="text-xs text-slate-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200 leading-relaxed font-semibold">
+                            {activeRx.advice}
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="pt-3 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-500">
+                        <span className="flex items-center gap-1 font-semibold text-emerald-700">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          {lang === 'hi' ? 'चिकित्सा अधिकारी द्वारा डिजिटल रूप से हस्ताक्षरित' : 'Authenticated by Medical Officer'}
+                        </span>
+                        <span className="font-mono">
+                          {lang === 'hi' ? 'विजिट' : 'Encounter'} #{patientRxHistoryList.length > 0 ? (patientRxHistoryList.length - selectedRxIndex) : 1}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()
               ) : (
                 <div className="py-12 text-center text-slate-400 text-xs">
                   {lang === 'hi' ? 'इस नागरिक के लिए कोई पर्ची उपलब्ध नहीं है।' : 'No prescription record available for this citizen.'}
